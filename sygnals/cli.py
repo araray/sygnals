@@ -1,7 +1,18 @@
 import click
 import json
+import numpy as np
 import pandas as pd
-from sygnals.core import data_handler, dsp, transforms, filters, audio_handler, plugin_manager, batch_processor, custom_exec, storage
+from sygnals.core import (
+    data_handler,
+    dsp,
+    transforms,
+    filters,
+    audio_handler,
+    plugin_manager,
+    batch_processor,
+    custom_exec,
+    storage
+)
 from sygnals.utils import visualizations
 from tabulate import tabulate
 
@@ -28,7 +39,8 @@ def analyze(file, output):
         }
 
     if output == "json":
-        click.echo(json.dumps(metrics, indent=2))
+        # Ensure compatibility with JSON serialization
+        click.echo(json.dumps(metrics, indent=2, default=lambda x: float(x) if isinstance(x, (int, float)) else x))
     elif output == "csv":
         pd.DataFrame([metrics]).to_csv("analysis.csv", index=False)
         click.echo("Analysis saved to analysis.csv")
@@ -100,19 +112,28 @@ def manipulate(file, query, filter, output):
     data_handler.save_data(result, output)
     click.echo(f"Manipulated data saved to {output}")
 
-@cli.command()
+@click.group()
+def audio():
+    """Audio processing commands."""
+    pass
+
+@audio.command()
 @click.argument("file", type=click.Path(exists=True))
 @click.option("--effect", type=click.Choice(["stretch", "pitch-shift", "compression"]), required=True)
-@click.option("--factor", type=float, help="Stretch factor for time-stretching or semitones for pitch-shift.")
+@click.option("--factor", type=float, help="Stretch factor or semitone shift (e.g., 1.5 for stretch, 2 for pitch shift).")
 @click.option("--output", type=click.Path(), required=True)
-def audio_effect(file, effect, factor, output):
+def effect(file, effect, factor, output):
     """Apply audio effects like time-stretching or pitch-shifting."""
     data, sr = audio_handler.load_audio(file)
 
     if effect == "stretch":
-        result = audio_handler.time_stretch(data, factor)
+        if factor is None:
+            raise click.UsageError("Stretch effect requires --factor.")
+        result = audio_handler.time_stretch(data, rate=factor)
     elif effect == "pitch-shift":
-        result = audio_handler.pitch_shift(data, sr, factor)
+        if factor is None:
+            raise click.UsageError("Pitch-shift effect requires --factor.")
+        result = audio_handler.pitch_shift(data, sr, n_steps=factor)
     elif effect == "compression":
         result = audio_handler.dynamic_range_compression(data)
     else:
@@ -120,6 +141,21 @@ def audio_effect(file, effect, factor, output):
 
     audio_handler.save_audio(result, sr, output)
     click.echo(f"Effect applied and saved to {output}")
+
+@audio.command()
+@click.argument("file", type=click.Path(exists=True))
+@click.option("--start", type=float, required=True, help="Start time in seconds.")
+@click.option("--end", type=float, required=True, help="End time in seconds.")
+@click.option("--output", type=click.Path(), required=True)
+def slice(file, start, end, output):
+    """Slice a segment from an audio file."""
+    data, sr = audio_handler.load_audio(file)
+    sliced_data = audio_handler.slice_audio(data, sr, start, end)
+    audio_handler.save_audio(sliced_data, sr, output)
+    click.echo(f"Audio sliced and saved to {output}")
+
+# Register the audio group
+cli.add_command(audio)
 
 @cli.command()
 @click.option("--input-dir", type=click.Path(exists=True), required=True)
@@ -182,8 +218,6 @@ def plugin(list_plugins, plugin, file, output):
 @click.option("--output", type=click.Path(), required=True)
 def math(expression, x_range, output):
     """Evaluate a custom mathematical expression."""
-    import numpy as np
-    import pandas as pd
 
     # Parse x-range
     start, end, step = map(float, x_range.split(","))
@@ -196,39 +230,6 @@ def math(expression, x_range, output):
     # Save the results
     data_handler.save_data(result_df, output)
     click.echo(f"Math results saved to {output}")
-
-@click.group()
-def audio():
-    """Audio processing commands."""
-    pass
-
-@audio.command()
-@click.argument("file", type=click.Path(exists=True))
-@click.option("--effect", type=click.Choice(["stretch", "pitch-shift", "compression"]), required=True)
-@click.option("--factor", type=float, help="Stretch factor or semitone shift (e.g., 1.5 for stretch, 2 for pitch shift).")
-@click.option("--output", type=click.Path(), required=True)
-def effect(file, effect, factor, output):
-    """Apply audio effects like time-stretching or pitch-shifting."""
-    data, sr = audio_handler.load_audio(file)
-
-    if effect == "stretch":
-        if factor is None:
-            raise click.UsageError("Stretch effect requires --factor.")
-        result = audio_handler.time_stretch(data, factor)
-    elif effect == "pitch-shift":
-        if factor is None:
-            raise click.UsageError("Pitch-shift effect requires --factor.")
-        result = audio_handler.pitch_shift(data, sr, factor)
-    elif effect == "compression":
-        result = audio_handler.dynamic_range_compression(data)
-    else:
-        raise click.UsageError("Invalid effect specified.")
-
-    audio_handler.save_audio(result, sr, output)
-    click.echo(f"Effect applied and saved to {output}")
-
-# Register the audio group
-cli.add_command(audio)
 
 
 if __name__ == "__main__":
