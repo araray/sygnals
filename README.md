@@ -1,8 +1,3 @@
-This file provides an overview of the project, how to install it, and how to use the CLI commands.
-
-### **Contents**
-
-```markdown
 # Sygnals
 
 **Sygnals** is a versatile command-line interface (CLI) for signal and audio processing. It allows you to analyze, manipulate, and transform time-series and audio data with a wide range of DSP features.
@@ -25,8 +20,8 @@ This file provides an overview of the project, how to install it, and how to use
 Clone the repository and install the required dependencies:
 
 ```bash
-git clone https://github.com/yourusername/dsp-tool.git
-cd dsp-tool
+git clone https://github.com/yourusername/sygnals.git
+cd sygnals
 pip install .
 ```
 
@@ -36,27 +31,27 @@ pip install .
 
 Run the CLI tool:
 ```bash
-dsp-tool --help
+sygnals --help
 ```
 
 ### Analyze Data or Audio
 ```bash
-dsp-tool analyze input.wav --output json
+sygnals analyze input.wav --output json
 ```
 
 ### Apply Filters
 ```bash
-dsp-tool filter input.csv --low-pass 100 --output filtered.csv
+sygnals filter input.csv --low-pass 100 --output filtered.csv
 ```
 
 ### Transform Data
 ```bash
-dsp-tool transform input.csv --fft --output fft_result.csv
+sygnals transform input.csv --fft --output fft_result.csv
 ```
 
 ### Visualize Data
 ```bash
-dsp-tool visualize input.wav --type spectrogram --output spectrogram.png
+sygnals visualize input.wav --type spectrogram --output spectrogram.png
 ```
 
 ---
@@ -74,10 +69,10 @@ def my_custom_plugin(data):
 
 List plugins:
 ```bash
-dsp-tool plugin --list
+sygnals plugin --list
 ```
 
 Run a plugin:
 ```bash
-dsp-tool plugin my_custom_plugin input.csv --output output.csv
+sygnals plugin my_custom_plugin input.csv --output output.csv
 ```
