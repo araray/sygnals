@@ -20,7 +20,7 @@
 Clone the repository and install the required dependencies:
 
 ```bash
-git clone https://github.com/yourusername/sygnals.git
+git clone https://github.com/araray/sygnals.git
 cd sygnals
 pip install .
 ```
