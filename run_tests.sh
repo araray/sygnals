@@ -31,7 +31,7 @@ function check_output_file() {
     fi
 }
 
-if [[ "${av_debug}" = true ]]; then
+if [[ "${SYGNALS_debug}" = true ]]; then
     # Redirect all output to the timestamped logging function
     exec > >(log_with_timestamp | tee -a ${output_dir}/test_run-$(date +'%s').log) 2>&1
 else
