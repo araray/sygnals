@@ -2,6 +2,11 @@ import click
 import json
 import numpy as np
 import pandas as pd
+import os
+
+from rich.console import Console
+from rich.table import Table
+from rich import print
 from sygnals.core import (
     data_handler,
     dsp,
@@ -15,6 +20,9 @@ from sygnals.core import (
 )
 from sygnals.utils import visualizations
 from tabulate import tabulate
+
+# Global Console Object
+console = Console()
 
 @click.group()
 def cli():
@@ -112,6 +120,7 @@ def manipulate(file, query, filter, output):
     data_handler.save_data(result, output)
     click.echo(f"Manipulated data saved to {output}")
 
+
 @click.group()
 def audio():
     """Audio processing commands."""
@@ -119,33 +128,88 @@ def audio():
 
 @audio.command()
 @click.argument("file", type=click.Path(exists=True))
-@click.option("--output", type=click.Path(), help="Export audio data to csv, json, or wav.")
-@click.option("--format", type=click.Choice(["csv", "json", "wav"]), help="Format for exporting audio data.")
-def show(file, output, format):
+@click.option("--output", type=click.Path(), help="Export audio data to a file (csv, json, wav).")
+@click.option("--format", type=click.Choice(["raw", "csv", "json", "tabulate", "wav"]), default="tabulate", help="Format for displaying or exporting audio data.")
+@click.option("--full-output", is_flag=True, help="Force full output instead of truncating.")
+def show(file, output, format, full_output):
     """Show audio data and optionally export it."""
     data, sr = audio_handler.load_audio(file)
 
-    # Display audio data
+    # Generate time values for the waveform
     time_values = np.arange(len(data)) / sr
     audio_df = pd.DataFrame({"time": time_values, "amplitude": data})
 
-    if not output:
-        # If no output specified, just display the data
-        click.echo(tabulate(audio_df.head(10), headers="keys", tablefmt="grid"))
-        click.echo(f"... ({len(audio_df)} total samples)")
-    else:
-        # Export the data to the chosen format
-        if format == "csv":
-            audio_handler.save_audio_as_csv(audio_df, output)
-            click.echo(f"Audio data exported to {output}")
-        elif format == "json":
-            audio_handler.save_audio_as_json(audio_df, output)
-            click.echo(f"Audio data exported to {output}")
-        elif format == "wav":
-            audio_handler.save_audio(data, sr, output)
+    if format == "raw":
+        # Raw format: space-separated values for piping
+        raw_output = "\n".join(f"{row.time} {row.amplitude}" for _, row in audio_df.iterrows())
+        if output:
+            with open(output, "w") as f:
+                f.write(raw_output)
             click.echo(f"Audio data exported to {output}")
         else:
-            raise click.UsageError("Unsupported format. Choose csv, json, or wav.")
+            click.echo(raw_output)
+    elif format == "csv":
+        if output:
+            audio_handler.save_audio_as_csv(audio_df, output)
+            click.echo(f"Audio data exported to {output}")
+        else:
+            click.echo(audio_df.to_csv(index=False))
+    elif format == "json":
+        if output:
+            audio_handler.save_audio_as_json(audio_df, output)
+            click.echo(f"Audio data exported to {output}")
+        else:
+            click.echo(audio_df.to_json(orient="records", indent=2))
+    elif format == "tabulate":
+        # Tabulated format for CLI viewing
+        if full_output:
+            click.echo(tabulate(audio_df, headers="keys", tablefmt="grid"))
+        else:
+            click.echo(tabulate(audio_df.head(10), headers="keys", tablefmt="grid"))
+            click.echo(f"... ({len(audio_df)} total samples)")
+    elif format == "wav":
+        if not output:
+            raise click.UsageError("WAV output requires --output.")
+        audio_handler.save_audio(data, sr, output)
+        click.echo(f"Audio data exported to {output}")
+
+@audio.command()
+@click.argument("file", type=click.Path(exists=True))
+def info(file):
+    """Show information about an audio file."""
+    data, sr = audio_handler.load_audio(file)
+    info = {
+        "file_path": file,
+        "channels": 1 if data.ndim == 1 else data.shape[1],
+        "sampling_rate (Hz)": sr,
+        "duration (seconds)": len(data) / sr,
+        "bit_depth": "Unknown (depends on file format)",  # Librosa doesn't provide bit depth
+        "size (bytes)": os.path.getsize(file),
+    }
+    click.echo(json.dumps(info, indent=2))
+
+@audio.command()
+@click.argument("file", type=click.Path(exists=True))
+@click.option("--new-sr", type=int, required=True, help="New sampling rate for the audio file.")
+@click.option("--output", type=click.Path(), required=True)
+def resample(file, new_sr, output):
+    """Resample audio to a new sampling rate."""
+    data, sr = audio_handler.load_audio(file)
+    resampled_data = librosa.resample(data, orig_sr=sr, target_sr=new_sr)
+    audio_handler.save_audio(resampled_data, new_sr, output)
+    click.echo(f"Resampled audio saved to {output} with sampling rate {new_sr} Hz")
+
+@audio.command()
+@click.argument("file", type=click.Path(exists=True))
+@click.option("--target-amplitude", type=float, required=True, help="Target peak amplitude for normalization.")
+@click.option("--output", type=click.Path(), required=True)
+def normalize(file, target_amplitude, output):
+    """Normalize audio to a target amplitude."""
+    data, sr = audio_handler.load_audio(file)
+    max_amplitude = np.max(np.abs(data))
+    normalized_data = data * (target_amplitude / max_amplitude)
+    audio_handler.save_audio(normalized_data, sr, output)
+    click.echo(f"Normalized audio saved to {output}")
 
 @audio.command()
 @click.argument("file", type=click.Path(exists=True))
@@ -202,8 +266,16 @@ def batch(input_dir, transform, output_dir):
 @click.option("--output", type=click.Path(), required=True)
 @click.option("--min_freq", type=click.Path(), required=False)
 @click.option("--max_freq", type=click.Path(), required=False)
-def visualize(file, type, output, min_freq, max_freq):
+@click.option("--extra-params", type=str, help="Additional parameters for visualization libraries in key=value format (comma-separated).")
+def visualize(file, type, output, min_freq, max_freq, extra_params):
     """Generate visualizations like spectrograms or FFT plots."""
+    params = {}
+    if extra_params:
+        # Parse key=value pairs
+        for param in extra_params.split(","):
+            key, value = param.split("=")
+            params[key.strip()] = eval(value.strip())  # Safely evaluate numeric or tuple values
+
     if file.endswith(('.wav', '.mp3')):
         data, sr = audio_handler.load_audio(file)
     else:
@@ -211,13 +283,13 @@ def visualize(file, type, output, min_freq, max_freq):
         sr = 1
 
     if type == "fft":
-        visualizations.plot_fft(data, sr, output)
+        visualizations.plot_fft(data, sr, output, **params)
     elif type == "spectrogram":
         min_freq = float(min_freq) if min_freq else 0
         max_freq = float(max_freq) if max_freq else None
-        visualizations.plot_spectrogram(data, sr, output, min_freq, max_freq)
+        visualizations.plot_spectrogram(data, sr, output, min_freq, max_freq, **params)
     elif type == "waveform":
-        visualizations.plot_waveform(data, sr, output)
+        visualizations.plot_waveform(data, sr, output, **params)
 
     click.echo(f"{type.capitalize()} visualization saved to {output}")
 

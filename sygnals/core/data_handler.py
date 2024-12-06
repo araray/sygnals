@@ -1,7 +1,7 @@
 import pandas as pd
 import pandasql as ps
 import os
-import json
+import sys
 
 # Supported formats
 SUPPORTED_FORMATS = ['csv', 'json']
@@ -11,6 +11,8 @@ def read_data(file_path):
     _, ext = os.path.splitext(file_path)
     ext = ext.lower()
 
+    if file_path == "-":
+        return pd.read_csv(sys.stdin)
     if ext == '.csv':
         return pd.read_csv(file_path)
     elif ext == '.json':
