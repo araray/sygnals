@@ -119,6 +119,36 @@ def audio():
 
 @audio.command()
 @click.argument("file", type=click.Path(exists=True))
+@click.option("--output", type=click.Path(), help="Export audio data to csv, json, or wav.")
+@click.option("--format", type=click.Choice(["csv", "json", "wav"]), help="Format for exporting audio data.")
+def show(file, output, format):
+    """Show audio data and optionally export it."""
+    data, sr = audio_handler.load_audio(file)
+
+    # Display audio data
+    time_values = np.arange(len(data)) / sr
+    audio_df = pd.DataFrame({"time": time_values, "amplitude": data})
+
+    if not output:
+        # If no output specified, just display the data
+        click.echo(tabulate(audio_df.head(10), headers="keys", tablefmt="grid"))
+        click.echo(f"... ({len(audio_df)} total samples)")
+    else:
+        # Export the data to the chosen format
+        if format == "csv":
+            audio_handler.save_audio_as_csv(audio_df, output)
+            click.echo(f"Audio data exported to {output}")
+        elif format == "json":
+            audio_handler.save_audio_as_json(audio_df, output)
+            click.echo(f"Audio data exported to {output}")
+        elif format == "wav":
+            audio_handler.save_audio(data, sr, output)
+            click.echo(f"Audio data exported to {output}")
+        else:
+            raise click.UsageError("Unsupported format. Choose csv, json, or wav.")
+
+@audio.command()
+@click.argument("file", type=click.Path(exists=True))
 @click.option("--effect", type=click.Choice(["stretch", "pitch-shift", "compression"]), required=True)
 @click.option("--factor", type=float, help="Stretch factor or semitone shift (e.g., 1.5 for stretch, 2 for pitch shift).")
 @click.option("--output", type=click.Path(), required=True)
@@ -170,7 +200,9 @@ def batch(input_dir, transform, output_dir):
 @click.argument("file", type=click.Path(exists=True))
 @click.option("--type", type=click.Choice(["fft", "spectrogram", "waveform"]), required=True)
 @click.option("--output", type=click.Path(), required=True)
-def visualize(file, type, output):
+@click.option("--min_freq", type=click.Path(), required=False)
+@click.option("--max_freq", type=click.Path(), required=False)
+def visualize(file, type, output, min_freq, max_freq):
     """Generate visualizations like spectrograms or FFT plots."""
     if file.endswith(('.wav', '.mp3')):
         data, sr = audio_handler.load_audio(file)
@@ -181,7 +213,9 @@ def visualize(file, type, output):
     if type == "fft":
         visualizations.plot_fft(data, sr, output)
     elif type == "spectrogram":
-        visualizations.plot_spectrogram(data, sr, output)
+        min_freq = float(min_freq) if min_freq else 0
+        max_freq = float(max_freq) if max_freq else None
+        visualizations.plot_spectrogram(data, sr, output, min_freq, max_freq)
     elif type == "waveform":
         visualizations.plot_waveform(data, sr, output)
 

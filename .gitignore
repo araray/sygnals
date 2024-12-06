@@ -9,6 +9,8 @@ __pycache__/
 # Sygnals test artifacts
 temp/
 outputs/
+tests/artifacts
+experiments/
 
 # Distribution / packaging
 .Python

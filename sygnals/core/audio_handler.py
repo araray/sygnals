@@ -12,6 +12,14 @@ def save_audio(data, sr, output_path):
     """Save audio data to a WAV file."""
     sf.write(output_path, data, sr)
 
+def save_audio_as_csv(dataframe, output_path):
+    """Save audio data to a CSV file."""
+    dataframe.to_csv(output_path, index=False)
+
+def save_audio_as_json(dataframe, output_path):
+    """Save audio data to a JSON file."""
+    dataframe.to_json(output_path, orient="records", indent=2)
+
 # Audio metrics
 def get_audio_metrics(data, sr):
     """Calculate audio metrics."""
@@ -24,6 +32,13 @@ def get_audio_metrics(data, sr):
         "peak_amplitude": float(peak_amplitude),
         "duration (seconds)": float(duration)
     }
+
+# Audio slicing
+def slice_audio(data, sr, start_time, end_time):
+    """Extract a portion of audio data between start_time and end_time."""
+    start_sample = int(start_time * sr)
+    end_sample = int(end_time * sr)
+    return data[start_sample:end_sample]
 
 # Audio effects
 def time_stretch(data, rate):
