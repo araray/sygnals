@@ -1,4 +1,5 @@
 import os
+import pandas as pd
 
 from sygnals.core.data_handler import read_data, save_data
 from sygnals.core.dsp import compute_fft
@@ -12,12 +13,17 @@ def process_batch(input_dir, output_dir, transform):
         input_path = os.path.join(input_dir, file_name)
         output_path = os.path.join(output_dir, f"{file_name}_processed.csv")
 
+        data = read_data(input_path).values.flatten()
+
         if transform == "fft":
-            data = read_data(input_path).values.flatten()
             freqs, spectrum = compute_fft(data)
-            result = {"Frequency (Hz)": freqs, "Magnitude": spectrum}
+            result = pd.DataFrame({
+                "Frequency (Hz)": freqs,
+                "Magnitude": spectrum
+            })
             save_data(result, output_path)
         elif transform == "wavelet":
-            data = read_data(input_path).values.flatten()
             coeffs = wavelet_transform(data)
-            save_data(coeffs, output_path)
+            # coeffs is a list, convert it appropriately
+            result = pd.DataFrame({f"Level {i+1}": c for i, c in enumerate(coeffs)})
+            save_data(result, output_path)

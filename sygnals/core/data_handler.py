@@ -38,7 +38,8 @@ def save_data(data, output_path):
 
 def run_sql_query(data, query):
     """Execute an SQL query on a Pandas DataFrame."""
-    return ps.sqldf(query, locals())
+    env = {'df': data}
+    return ps.sqldf(query, env)
 
 
 def filter_data(data, filter_expr):

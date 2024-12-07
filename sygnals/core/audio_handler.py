@@ -12,7 +12,7 @@ def load_audio(file_path, sr=None):
 
 def save_audio(data, sr, output_path):
     """Save audio data to a WAV file."""
-    sf.write(output_path, data, sr)
+    sf.write(output_path, data, sr, format='WAV', subtype='FLOAT')
 
 
 def save_audio_as_csv(dataframe, output_path):

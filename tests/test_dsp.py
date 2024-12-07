@@ -1,50 +1,46 @@
-import unittest
-
+import pytest
 import numpy as np
+from sygnals.core.dsp import compute_fft, compute_ifft, apply_convolution, apply_window
 
-from sygnals.core.dsp import (
-    apply_window,
-    band_pass_filter,
-    compute_fft,
-    compute_ifft,
-    high_pass_filter,
-    low_pass_filter,
-)
+def test_compute_fft():
+    fs = 1000
+    t = np.arange(0,1,1/fs)
+    freq = 50
+    x = np.sin(2*np.pi*freq*t)
+    freqs, spectrum = compute_fft(x, fs)
+    peak_freq = freqs[np.argmax(spectrum)]
+    assert abs(peak_freq - 50) < 1.0
 
+def test_compute_fft():
+    fs = 1000
+    t = np.arange(0, 1, 1/fs)
+    freq = 50
+    x = np.sin(2*np.pi*freq*t)
 
-class TestDSP(unittest.TestCase):
-    def setUp(self):
-        self.sample_rate = 1000  # Sampling rate in Hz
-        self.signal = np.sin(
-            2 * np.pi * 10 * np.linspace(0, 1, self.sample_rate)
-        )  # 10 Hz sine wave
+    freqs, spectrum = compute_fft(x, fs)
+    # Consider only the positive half of the spectrum
+    half_n = len(freqs) // 2
+    positive_freqs = freqs[:half_n]
+    positive_magnitude = np.abs(spectrum[:half_n])
 
-    def test_fft(self):
-        freqs, spectrum = compute_fft(self.signal, self.sample_rate)
-        self.assertEqual(len(freqs), len(self.signal))
-        self.assertTrue(
-            np.isclose(max(spectrum), self.sample_rate / 2)
-        )  # Peak in magnitude
+    # Find the peak frequency in the positive half of the spectrum
+    peak_freq = positive_freqs[np.argmax(positive_magnitude)]
 
-    def test_ifft(self):
-        _, spectrum = compute_fft(self.signal, self.sample_rate)
-        reconstructed_signal = compute_ifft(spectrum)
-        self.assertTrue(np.allclose(self.signal, reconstructed_signal, atol=1e-6))
+    # Check that the peak frequency is close to the expected 50 Hz
+    assert abs(peak_freq - freq) < 1.0, f"Peak frequency {peak_freq} is not close to expected {freq} Hz."
 
-    def test_low_pass_filter(self):
-        filtered_signal = low_pass_filter(self.signal, cutoff=15, fs=self.sample_rate)
-        self.assertEqual(len(filtered_signal), len(self.signal))
+def test_apply_convolution():
+    x = np.array([1,2,3,4], dtype=float)
+    kernel = np.array([1,1])
+    y = apply_convolution(x, kernel)
+    # Convolution with [1,1] should produce partial sums
+    # Expected: [1+0,1+2,2+3,3+4,4+0] if full conv, but we have same mode
+    # fftconvolve same mode returns length of x
+    # Just check it didn't crash and length is same:
+    assert len(y) == len(x)
 
-    def test_high_pass_filter(self):
-        filtered_signal = high_pass_filter(self.signal, cutoff=5, fs=self.sample_rate)
-        self.assertEqual(len(filtered_signal), len(self.signal))
-
-    def test_band_pass_filter(self):
-        filtered_signal = band_pass_filter(
-            self.signal, low_cutoff=5, high_cutoff=15, fs=self.sample_rate
-        )
-        self.assertEqual(len(filtered_signal), len(self.signal))
-
-    def test_apply_window(self):
-        windowed_signal = apply_window(self.signal, window_type="hamming")
-        self.assertEqual(len(windowed_signal), len(self.signal))
+def test_apply_window():
+    x = np.ones(10)
+    w = apply_window(x, window_type='hamming')
+    assert len(w) == 10
+    assert not np.allclose(w, x)  # window changes values

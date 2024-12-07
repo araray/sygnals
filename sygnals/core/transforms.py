@@ -3,7 +3,7 @@ import pywt
 from scipy.fft import fft, ifft
 
 
-# Fourier Transform
+# Fast Fourier Transform
 def fft(data):
     """Compute the FFT of a signal."""
     return np.fft.fft(data)

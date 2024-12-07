@@ -7,9 +7,9 @@ from scipy.signal import butter, fftconvolve, get_window, lfilter
 def compute_fft(data, fs=1):
     """Compute FFT and return frequency and magnitude."""
     n = len(data)
-    freqs = np.fft.fftfreq(n, d=1 / fs)
+    freqs = np.fft.fftfreq(n, d=1/fs)
     spectrum = fft(data)
-    return freqs, np.abs(spectrum)
+    return freqs, spectrum
 
 
 def compute_ifft(spectrum):
