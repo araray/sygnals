@@ -10,4 +10,3 @@ sine_wave = 0.5 * np.sin(2 * np.pi * frequency * t)
 
 # Save as a WAV file
 sf.write("test_audio.wav", sine_wave, sampling_rate)
-

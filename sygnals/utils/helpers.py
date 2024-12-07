@@ -6,10 +6,12 @@ def create_directory(path):
     if not os.path.exists(path):
         os.makedirs(path)
 
+
 def get_file_extension(file_path):
     """Extract the file extension from a path."""
     _, ext = os.path.splitext(file_path)
     return ext.lower()
+
 
 def validate_file_format(file_path, supported_formats):
     """Check if the file has a supported format."""

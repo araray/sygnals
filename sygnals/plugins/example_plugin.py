@@ -14,7 +14,8 @@ def custom_filter(data, alpha=0.5):
             smoothed_data.append(alpha * value + (1 - alpha) * smoothed_data[-1])
     return np.array(smoothed_data)
 
+
 @register_plugin
 def square_signal(data):
     """Square the signal values."""
-    return data ** 2
+    return data**2

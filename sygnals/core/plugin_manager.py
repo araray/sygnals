@@ -1,7 +1,8 @@
 import importlib.util
 import os
 
-PLUGIN_DIR = './plugins/'
+PLUGIN_DIR = "./plugins/"
+
 
 def discover_plugins(plugin_dir=PLUGIN_DIR):
     """Discover Python plugins in the plugins directory."""
@@ -10,7 +11,7 @@ def discover_plugins(plugin_dir=PLUGIN_DIR):
 
     plugins = {}
     for filename in os.listdir(plugin_dir):
-        if filename.endswith('.py'):
+        if filename.endswith(".py"):
             module_name = filename[:-3]
             module_path = os.path.join(plugin_dir, filename)
             spec = importlib.util.spec_from_file_location(module_name, module_path)
@@ -18,9 +19,12 @@ def discover_plugins(plugin_dir=PLUGIN_DIR):
             spec.loader.exec_module(module)
             for attr_name in dir(module):
                 attr = getattr(module, attr_name)
-                if callable(attr) and hasattr(attr, "__plugin__"):  # Only consider functions marked as plugins
+                if callable(attr) and hasattr(
+                    attr, "__plugin__"
+                ):  # Only consider functions marked as plugins
                     plugins[attr_name] = attr
     return plugins
+
 
 def register_plugin(func):
     """Mark a function as a plugin."""

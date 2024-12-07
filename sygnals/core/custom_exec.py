@@ -10,8 +10,9 @@ SAFE_GLOBALS = {
     "exp": np.exp,
     "log": np.log,
     "sqrt": np.sqrt,
-    "pi": np.pi
+    "pi": np.pi,
 }
+
 
 def evaluate_expression(expression, variables):
     """Safely evaluate a custom mathematical expression."""

@@ -8,5 +8,5 @@ __all__ = [
     "plugin_manager",
     "batch_processor",
     "custom_exec",
-    "storage"
+    "storage",
 ]

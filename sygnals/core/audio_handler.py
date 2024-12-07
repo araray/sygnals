@@ -9,17 +9,21 @@ def load_audio(file_path, sr=None):
     data, sample_rate = librosa.load(file_path, sr=sr)
     return data, sample_rate
 
+
 def save_audio(data, sr, output_path):
     """Save audio data to a WAV file."""
     sf.write(output_path, data, sr)
+
 
 def save_audio_as_csv(dataframe, output_path):
     """Save audio data to a CSV file."""
     dataframe.to_csv(output_path, index=False)
 
+
 def save_audio_as_json(dataframe, output_path):
     """Save audio data to a JSON file."""
     dataframe.to_json(output_path, orient="records", indent=2)
+
 
 # Audio metrics
 def get_audio_metrics(data, sr):
@@ -31,8 +35,9 @@ def get_audio_metrics(data, sr):
     return {
         "rms": float(rms),
         "peak_amplitude": float(peak_amplitude),
-        "duration (seconds)": float(duration)
+        "duration (seconds)": float(duration),
     }
+
 
 # Audio slicing
 def slice_audio(data, sr, start_time, end_time):
@@ -41,14 +46,17 @@ def slice_audio(data, sr, start_time, end_time):
     end_sample = int(end_time * sr)
     return data[start_sample:end_sample]
 
+
 # Audio effects
 def time_stretch(data, rate):
     """Stretch audio in time (does not affect pitch)."""
     return librosa.effects.time_stretch(y=data, rate=rate)
 
+
 def pitch_shift(data, sr, n_steps):
     """Shift the pitch of audio."""
     return librosa.effects.pitch_shift(y=data, sr=sr, n_steps=n_steps)
+
 
 def dynamic_range_compression(data, threshold=0.1):
     """Apply simple dynamic range compression to normalize the audio."""

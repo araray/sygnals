@@ -2,19 +2,29 @@ import unittest
 
 import numpy as np
 
-from sygnals.core.dsp import (apply_window, band_pass_filter, compute_fft,
-                              compute_ifft, high_pass_filter, low_pass_filter)
+from sygnals.core.dsp import (
+    apply_window,
+    band_pass_filter,
+    compute_fft,
+    compute_ifft,
+    high_pass_filter,
+    low_pass_filter,
+)
 
 
 class TestDSP(unittest.TestCase):
     def setUp(self):
         self.sample_rate = 1000  # Sampling rate in Hz
-        self.signal = np.sin(2 * np.pi * 10 * np.linspace(0, 1, self.sample_rate))  # 10 Hz sine wave
+        self.signal = np.sin(
+            2 * np.pi * 10 * np.linspace(0, 1, self.sample_rate)
+        )  # 10 Hz sine wave
 
     def test_fft(self):
         freqs, spectrum = compute_fft(self.signal, self.sample_rate)
         self.assertEqual(len(freqs), len(self.signal))
-        self.assertTrue(np.isclose(max(spectrum), self.sample_rate / 2))  # Peak in magnitude
+        self.assertTrue(
+            np.isclose(max(spectrum), self.sample_rate / 2)
+        )  # Peak in magnitude
 
     def test_ifft(self):
         _, spectrum = compute_fft(self.signal, self.sample_rate)
@@ -30,7 +40,9 @@ class TestDSP(unittest.TestCase):
         self.assertEqual(len(filtered_signal), len(self.signal))
 
     def test_band_pass_filter(self):
-        filtered_signal = band_pass_filter(self.signal, low_cutoff=5, high_cutoff=15, fs=self.sample_rate)
+        filtered_signal = band_pass_filter(
+            self.signal, low_cutoff=5, high_cutoff=15, fs=self.sample_rate
+        )
         self.assertEqual(len(filtered_signal), len(self.signal))
 
     def test_apply_window(self):
