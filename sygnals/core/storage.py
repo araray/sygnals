@@ -1,5 +1,7 @@
 import sqlite3
+
 import pandas as pd
+
 
 def save_to_database(data, db_path, table_name):
     """Save a Pandas DataFrame to an SQLite database."""

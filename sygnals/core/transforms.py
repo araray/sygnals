@@ -1,6 +1,7 @@
 import numpy as np
-from scipy.fft import fft, ifft
 import pywt
+from scipy.fft import fft, ifft
+
 
 # Fourier Transform
 def fft(data):

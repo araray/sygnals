@@ -1,6 +1,9 @@
 import unittest
+
 from click.testing import CliRunner
+
 from sygnals.cli import cli
+
 
 class TestCLI(unittest.TestCase):
     def setUp(self):

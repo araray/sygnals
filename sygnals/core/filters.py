@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.signal import butter, cheby1, firwin, lfilter
 
+
 # Butterworth Filter
 def butterworth_filter(data, cutoff, fs, order=5, filter_type='low'):
     """Apply a Butterworth filter."""

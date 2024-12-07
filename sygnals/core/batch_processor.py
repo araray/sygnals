@@ -1,7 +1,9 @@
 import os
+
 from sygnals.core.data_handler import read_data, save_data
 from sygnals.core.dsp import compute_fft
 from sygnals.core.transforms import wavelet_transform
+
 
 def process_batch(input_dir, output_dir, transform):
     """Process multiple files in a directory and apply the given transform."""

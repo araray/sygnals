@@ -1,25 +1,18 @@
-import click
 import json
-import numpy as np
-import pandas as pd
 import os
 
+import click
+import numpy as np
+import pandas as pd
+from rich import print
 from rich.console import Console
 from rich.table import Table
-from rich import print
-from sygnals.core import (
-    data_handler,
-    dsp,
-    transforms,
-    filters,
-    audio_handler,
-    plugin_manager,
-    batch_processor,
-    custom_exec,
-    storage
-)
-from sygnals.utils import visualizations
 from tabulate import tabulate
+
+from sygnals.core import (audio_handler, batch_processor, custom_exec,
+                          data_handler, dsp, filters, plugin_manager, storage,
+                          transforms)
+from sygnals.utils import visualizations
 
 # Global Console Object
 console = Console()

@@ -1,10 +1,10 @@
 import unittest
+
 import numpy as np
-from sygnals.core.dsp import (
-    compute_fft, compute_ifft,
-    low_pass_filter, high_pass_filter,
-    band_pass_filter, apply_window
-)
+
+from sygnals.core.dsp import (apply_window, band_pass_filter, compute_fft,
+                              compute_ifft, high_pass_filter, low_pass_filter)
+
 
 class TestDSP(unittest.TestCase):
     def setUp(self):

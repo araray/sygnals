@@ -1,5 +1,7 @@
-from sygnals.core.plugin_manager import register_plugin
 import numpy as np
+
+from sygnals.core.plugin_manager import register_plugin
+
 
 @register_plugin
 def custom_filter(data, alpha=0.5):

@@ -1,7 +1,8 @@
-import pandas as pd
-import pandasql as ps
 import os
 import sys
+
+import pandas as pd
+import pandasql as ps
 
 # Supported formats
 SUPPORTED_FORMATS = ['csv', 'json']

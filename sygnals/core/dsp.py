@@ -1,6 +1,7 @@
 import numpy as np
-from scipy.signal import butter, lfilter, fftconvolve, get_window
 from scipy.fft import fft, ifft
+from scipy.signal import butter, fftconvolve, get_window, lfilter
+
 
 # FFT-related functions
 def compute_fft(data, fs=1):

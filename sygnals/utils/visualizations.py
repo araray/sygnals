@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.signal import spectrogram
 
+
 def plot_spectrogram_old(data, sr, output_file):
     """Generate and save a spectrogram plot."""
     f, t, Sxx = spectrogram(data, sr)
