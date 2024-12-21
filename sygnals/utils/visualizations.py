@@ -70,11 +70,22 @@ def plot_spectrogram(
 
 def plot_fft(data, sr, output_file):
     """Generate and save an FFT plot."""
-    n = len(data)
+
+    # Parse 'Magnitude' into complex numbers if stored as strings
+    data['Magnitude'] = data['Magnitude'].apply(
+        lambda x: complex(x.replace('(', '').replace(')', '')) if isinstance(x, str) else x
+    )
+
+    # Extract the FFT data (magnitude values only)
+    fft_data = data['Magnitude'].values  # Convert to numpy array
+
+    # Compute FFT
+    n = len(fft_data)
     freqs = np.fft.fftfreq(n, d=1 / sr)
-    spectrum = np.fft.fft(data)
+    spectrum = np.fft.fft(fft_data)
     magnitude = np.abs(spectrum)
 
+    # Plot the FFT
     plt.figure(figsize=(10, 6))
     plt.plot(freqs[: n // 2], magnitude[: n // 2])  # Only plot positive frequencies
     plt.xlabel("Frequency (Hz)")

@@ -1,6 +1,6 @@
 import json
 import os
-
+import sys
 import click
 import numpy as np
 import pandas as pd
@@ -81,9 +81,11 @@ def transform(file, fft, wavelet, output):
     )
 
     if fft:
+
         freqs, magnitudes = dsp.compute_fft(
-            data["value"], fs=1
+            data["y"], fs=1
         )  # fs=1 for time-series data
+
         result = pd.DataFrame({"Frequency (Hz)": freqs, "Magnitude": magnitudes})
     elif wavelet:
         coeffs = transforms.wavelet_transform(data["value"], wavelet)
@@ -356,7 +358,8 @@ def visualize(file, type, output, min_freq, max_freq, extra_params):
     if file.endswith((".wav", ".mp3")):
         data, sr = audio_handler.load_audio(file)
     else:
-        data = data_handler.read_data(file).values.flatten()
+        #data = data_handler.read_data(file).values.flatten()
+        data = data_handler.read_data(file)
         sr = 1
 
     if type == "fft":
