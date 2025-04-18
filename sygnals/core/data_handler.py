@@ -9,7 +9,7 @@ import os
 import sys
 import logging
 from pathlib import Path
-from typing import Union, Any
+from typing import Union, Any, Dict
 
 import pandas as pd
 import pandasql as ps
