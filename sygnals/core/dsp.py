@@ -22,7 +22,7 @@ def compute_fft(
     fs: Union[int, float] = 1.0,
     n: Optional[int] = None,
     window: Optional[str] = "hann"
-) -> Tuple[NDArray[np.float64], NDArray[np.complex_]]: # Changed from np.float_
+) -> Tuple[NDArray[np.float64], NDArray[np.complex128]]: # Changed from np.complex_
     """
     Computes the Fast Fourier Transform (FFT) of a real-valued signal.
 
@@ -38,7 +38,7 @@ def compute_fft(
     Returns:
         A tuple containing:
         - freqs (NDArray[np.float64]): Array of frequencies corresponding to the FFT bins.
-        - spectrum (NDArray[np.complex_]): Complex-valued FFT result.
+        - spectrum (NDArray[np.complex128]): Complex-valued FFT result.
     """
     if data.ndim != 1:
         raise ValueError("Input data must be a 1D array.")
@@ -71,10 +71,11 @@ def compute_fft(
     spectrum = fft(data, n=n)
     freqs = fftfreq(n, d=1/fs)
 
-    return freqs, spectrum
+    # Ensure output spectrum is complex128
+    return freqs.astype(np.float64, copy=False), spectrum.astype(np.complex128, copy=False)
 
 def compute_ifft(
-    spectrum: NDArray[np.complex_],
+    spectrum: NDArray[np.complex128], # Changed from np.complex_
     n: Optional[int] = None
 ) -> NDArray[np.float64]: # Changed from np.float_
     """
@@ -83,7 +84,7 @@ def compute_ifft(
     Assumes the input spectrum corresponds to a real-valued time-domain signal.
 
     Args:
-        spectrum: Complex-valued frequency spectrum.
+        spectrum: Complex-valued frequency spectrum (complex128).
         n: Length of the inverse FFT. If None, uses the length of the spectrum.
            Should typically match the original FFT length.
 
