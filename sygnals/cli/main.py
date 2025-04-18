@@ -23,13 +23,15 @@ logger = logging.getLogger(__name__)
 
 CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help'])
 
-# --- Define the main group object first ---
-# Instantiate the group, assigning the custom command class
-cli = click.Group(
-    name='sygnals-cli', # Explicitly name the group object if needed, separate from function name
-    context_settings=CONTEXT_SETTINGS,
-    cls=ConfigCommand, # Use the custom class for config/logging setup
-    help="""
+# --- Define the main group function using the decorator ---
+# Use the decorator to associate the custom command class
+@click.group(context_settings=CONTEXT_SETTINGS, cls=ConfigCommand)
+@click.version_option(__version__, '-V', '--version', package_name='sygnals', prog_name='sygnals')
+@verbose_option
+@quiet_option
+@click.pass_context # Pass context to access config object (ctx.obj)
+def cli(ctx, verbose: int, quiet: bool):
+    """
     Sygnals v1.0.0: A versatile CLI for signal and audio processing,
     tailored for data science workflows.
 
@@ -38,31 +40,16 @@ cli = click.Group(
 
     Use -v for verbose output, -vv for debug output, -q for quiet mode.
     """
-)
-
-# --- Define the function that runs when the group is invoked ---
-# Decorate this function with the group object itself (@cli)
-# Add options like version, verbosity to this function
-@cli # Use the group object as the decorator
-@click.version_option(__version__, '-V', '--version', package_name='sygnals', prog_name='sygnals') # Add prog_name
-@verbose_option
-@quiet_option
-@click.pass_context # Pass context to access config object (ctx.obj)
-def cli_entry_point(ctx, verbose: int, quiet: bool):
-    """
-    This function is executed when the main 'sygnals' command is run.
-    The actual logic for the group (like config loading) happens in ConfigCommand.
-    """
-    # The ConfigCommand already loaded the config into ctx.obj
-    # and set up logging based on verbose/quiet flags.
+    # This function is executed when the main 'sygnals' command is run.
+    # The actual logic for the group (like config loading) happens in ConfigCommand.
     config = ctx.obj
     logger.debug(f"Sygnals CLI group invoked with verbosity={verbose}, quiet={quiet}")
     logger.debug(f"Loaded config ID: {id(config)}") # Verify config object is passed
 
 
 # --- Register Commands ---
-# Now add commands using the group object's command decorator
-@cli.command() # Use @cli.command() here
+# Now add commands using the main group function's command decorator
+@cli.command() # Use @cli.command() - 'cli' now refers to the group created by the decorator
 @click.pass_context
 def hello(ctx):
     """A simple example command."""
