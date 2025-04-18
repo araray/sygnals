@@ -2,17 +2,20 @@
 
 """
 Pydantic models for defining the structure and validation of the sygnals configuration (sygnals.toml).
+Uses Pydantic V2 syntax.
 """
 
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union, Any
 
-from pydantic import BaseModel, Field, validator, DirectoryPath, FilePath
+# Import V2 components
+from pydantic import BaseModel, Field, field_validator, DirectoryPath, FilePath, ConfigDict
 
 # --- Helper Functions ---
 
 def _resolve_path(path: Union[str, Path]) -> Path:
     """Resolves and expands user paths."""
+    # Ensure input is converted to Path before expansion/resolution
     return Path(path).expanduser().resolve()
 
 # --- Model Definitions ---
@@ -28,17 +31,21 @@ class DefaultsConfig(BaseModel):
 
 class PathsConfig(BaseModel):
     """Configuration for file paths used by Sygnals."""
-    plugin_dir: Path = Field(Path("~/.config/sygnals/plugins"), description="Path to local user plugins.")
-    cache_dir: Path = Field(Path("./.sygnals_cache"), description="Path for temporary or cached files.")
-    output_dir: Path = Field(Path("./sygnals_output"), description="Default directory for saving results.")
-    log_directory: Path = Field(Path("./sygnals_logs"), description="Directory for log files.") # Moved from LoggingConfig for consistency
+    # Use Field validation for types where appropriate, although Pydantic handles Path conversion
+    plugin_dir: Path = Field(default=Path("~/.config/sygnals/plugins"), description="Path to local user plugins.")
+    cache_dir: Path = Field(default=Path("./.sygnals_cache"), description="Path for temporary or cached files.")
+    output_dir: Path = Field(default=Path("./sygnals_output"), description="Default directory for saving results.")
+    log_directory: Path = Field(default=Path("./sygnals_logs"), description="Directory for log files.") # Moved from LoggingConfig for consistency
 
-    # Validators to resolve paths
-    _resolve_plugin_dir = validator('plugin_dir', pre=True, allow_reuse=True)(_resolve_path)
-    _resolve_cache_dir = validator('cache_dir', pre=True, allow_reuse=True)(_resolve_path)
-    _resolve_output_dir = validator('output_dir', pre=True, allow_reuse=True)(_resolve_path)
-    _resolve_log_directory = validator('log_directory', pre=True, allow_reuse=True)(_resolve_path)
-
+    # Use field_validator with mode='before' to modify input before standard validation
+    @field_validator('plugin_dir', 'cache_dir', 'output_dir', 'log_directory', mode='before')
+    @classmethod
+    def resolve_paths_before_validation(cls, value: Any) -> Path:
+        """Resolves paths before Pydantic validates them."""
+        if isinstance(value, (str, Path)):
+            return _resolve_path(value)
+        # Let Pydantic handle other types or raise validation error
+        return value
 
 class STFTParams(BaseModel):
     """Parameters for Short-Time Fourier Transform."""
@@ -54,8 +61,8 @@ class MFCCParams(BaseModel):
 
 class FixedLengthSegmentationParams(BaseModel):
     """Parameters for fixed-length segmentation."""
-    length: float = 1.0 # Segment length in seconds
-    overlap: float = 0.5 # Overlap ratio (0.0 to < 1.0)
+    length: float = Field(1.0, gt=0, description="Segment length in seconds, must be positive.")
+    overlap: float = Field(0.5, ge=0, lt=1.0, description="Overlap ratio (0.0 to < 1.0).")
 
 class SegmentationParams(BaseModel):
     """Container for different segmentation method parameters."""
@@ -89,13 +96,16 @@ class LoggingConfig(BaseModel):
     log_format: str = Field("%(asctime)s [%(levelname)-8s] %(name)-30s - %(message)s (%(filename)s:%(lineno)d)", description="Format string for file log entries.")
     log_level_console: str = Field("INFO", description="Default minimum level for console output (overridden by verbosity flags).")
 
-    @validator('log_level_file', 'log_level_console')
-    def check_log_level(cls, value):
+    # Use field_validator for multiple fields
+    @field_validator('log_level_file', 'log_level_console')
+    @classmethod
+    def check_log_level(cls, value: str) -> str:
         """Validate log level strings."""
         allowed_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
-        if value.upper() not in allowed_levels:
+        upper_value = value.upper()
+        if upper_value not in allowed_levels:
             raise ValueError(f"Invalid log level '{value}'. Must be one of {allowed_levels}")
-        return value.upper()
+        return upper_value # Return the validated uppercase value
 
 class DiscoveryConfig(BaseModel):
     """Configuration for file/directory discovery processes."""
@@ -105,6 +115,12 @@ class DiscoveryConfig(BaseModel):
 
 class SygnalsConfig(BaseModel):
     """Root configuration model for Sygnals."""
+    # Define model config using ConfigDict
+    model_config = ConfigDict(
+        extra='allow', # Allow extra fields (e.g., for plugin configs)
+        validate_assignment=True # Re-validate fields on assignment
+    )
+
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
     paths: PathsConfig = Field(default_factory=PathsConfig)
     parameters: ParametersConfig = Field(default_factory=ParametersConfig)
@@ -112,8 +128,4 @@ class SygnalsConfig(BaseModel):
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
 
     # Placeholder for future plugin-specific configurations
-    plugins: Dict[str, Dict] = Field(default_factory=dict, description="Configurations specific to installed plugins.")
-
-    class Config:
-        # Allow extra fields (e.g., for plugin configs) without validation errors initially
-        extra = 'allow'
+    plugins: Dict[str, Dict[str, Any]] = Field(default_factory=dict, description="Configurations specific to installed plugins.")
