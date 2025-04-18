@@ -151,10 +151,3 @@ def process_batch(input_dir: str, output_dir: str, transform: str):
             skipped_count += 1
 
     logger.info(f"Batch processing finished. Processed: {processed_count}, Skipped: {skipped_count}")
-
-```text
-feat: Correct import name for wavelet transform in batch processor
-
-Renamed `wavelet_transform` to `discrete_wavelet_transform` in the import statement and function call within `sygnals/core/batch_processor.py` to align with the updated function name in `sygnals/core/transforms.py`. This resolves the ImportError encountered during test collection.
-
-Also added basic logging, pathlib usage, and error handling improvements.
