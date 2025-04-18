@@ -6,7 +6,7 @@ Functions for generating various visualizations of signal data using Matplotlib.
 
 import logging
 # Import necessary types
-from typing import Optional, Tuple, Union
+from typing import Any, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
