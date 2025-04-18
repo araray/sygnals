@@ -1,44 +1,68 @@
 # sygnals/core/data_handler.py
 
 """
-Handles reading and writing data from/to various file formats (CSV, JSON, etc.)
-using Pandas DataFrames. Also includes basic data manipulation utilities.
+Handles reading and writing data from/to various file formats.
+Supports tabular data (CSV, JSON) via Pandas and numerical data (NPZ).
+Delegates audio file handling to sygnals.core.audio.io.
 """
 
 import os
 import sys
 import logging
 from pathlib import Path
-from typing import Union, Any, Dict
+from typing import Union, Any, Dict, Tuple
 
 import pandas as pd
 import pandasql as ps
-from numpy.typing import NDArray
 import numpy as np
+from numpy.typing import NDArray
 
+# Import audio I/O functions
+from .audio.io import load_audio as load_audio_file
+from .audio.io import save_audio as save_audio_file
 
 logger = logging.getLogger(__name__)
 
-# Supported formats (can be expanded)
-SUPPORTED_READ_FORMATS = [".csv", ".json"] # Add .wav, .flac, .ogg handled by audio_handler
-SUPPORTED_WRITE_FORMATS = [".csv", ".json", ".npz"] # Add .wav, .flac, .ogg handled by audio_handler
+# Define supported formats explicitly
+TABULAR_READ_FORMATS = {".csv", ".json"}
+ARRAY_READ_FORMATS = {".npz"}
+AUDIO_READ_FORMATS = {".wav", ".flac", ".ogg", ".mp3"} # Add more as supported by librosa/soundfile
+SUPPORTED_READ_FORMATS = TABULAR_READ_FORMATS | ARRAY_READ_FORMATS | AUDIO_READ_FORMATS
+
+TABULAR_WRITE_FORMATS = {".csv", ".json"}
+ARRAY_WRITE_FORMATS = {".npz"}
+AUDIO_WRITE_FORMATS = {".wav", ".flac", ".ogg"} # Add more as supported by soundfile
+SUPPORTED_WRITE_FORMATS = TABULAR_WRITE_FORMATS | ARRAY_WRITE_FORMATS | AUDIO_WRITE_FORMATS
 
 
-def read_data(file_path: Union[str, Path]) -> pd.DataFrame:
+# Define return types for clarity
+ReadResult = Union[pd.DataFrame, Dict[str, NDArray[Any]], Tuple[NDArray[np.float64], int]]
+SaveInput = Union[pd.DataFrame, NDArray[Any], Dict[str, NDArray[Any]], Tuple[NDArray[np.float64], int]]
+
+
+def read_data(
+    file_path: Union[str, Path],
+    sr: Optional[int] = None # Target sample rate for audio
+) -> ReadResult:
     """
-    Loads data from a supported file format into a Pandas DataFrame.
-    Handles CSV and JSON. Reads from stdin if file_path is '-'.
+    Loads data from a supported file format.
+
+    - Reads CSV/JSON into Pandas DataFrame.
+    - Reads NPZ into a dictionary of NumPy arrays.
+    - Reads audio files (WAV, FLAC, OGG, MP3) into a tuple (data: ndarray, sr: int).
+    - Reads from stdin (assumed CSV) if file_path is '-'.
 
     Args:
         file_path: Path to the input file or '-' for stdin.
+        sr: Target sampling rate (only used when loading audio files).
 
     Returns:
-        A Pandas DataFrame containing the loaded data.
+        Loaded data in the appropriate format (DataFrame, dict, or tuple).
 
     Raises:
-        ValueError: If the file format is not supported.
+        ValueError: If the file format is not supported or arguments are invalid.
         FileNotFoundError: If the file does not exist (and is not '-').
-        Exception: For other Pandas reading errors.
+        Exception: For underlying read errors.
     """
     file_path_str = str(file_path)
     logger.info(f"Reading data from: {file_path_str}")
@@ -57,112 +81,132 @@ def read_data(file_path: Union[str, Path]) -> pd.DataFrame:
 
         ext = fpath.suffix.lower()
         if ext not in SUPPORTED_READ_FORMATS:
-            # Check if it's an audio format handled elsewhere
-            if ext not in [".wav", ".flac", ".ogg", ".mp3"]: # Add other audio formats if needed
-                raise ValueError(f"Unsupported file format for generic data reading: '{ext}'. "
-                                 f"Supported: {SUPPORTED_READ_FORMATS}. "
-                                 f"Use audio commands for audio files.")
-            else:
-                # This function shouldn't handle audio directly, raise appropriate error or let caller handle
-                raise ValueError(f"Attempted to read audio file '{ext}' with generic read_data. Use audio loading functions.")
-
+            raise ValueError(f"Unsupported file format: '{ext}'. Supported: {SUPPORTED_READ_FORMATS}")
 
         try:
-            if ext == ".csv":
-                return pd.read_csv(fpath)
-            elif ext == ".json":
-                # Try reading as records orientation first, common for list of dicts
-                try:
-                    return pd.read_json(fpath, orient='records')
-                except ValueError:
-                    logger.warning("Failed to read JSON with orient='records', trying default orientation.")
-                    # Fallback to default read_json behavior
-                    return pd.read_json(fpath)
-            # Add readers for other formats like npz, parquet later if needed
-            # elif ext == ".npz":
-            #     data = np.load(fpath)
-            #     # Convert npz structure to DataFrame (requires convention)
-            #     # Example: assume dict of 1D arrays
-            #     return pd.DataFrame({k: v for k, v in data.items() if v.ndim == 1})
+            if ext in TABULAR_READ_FORMATS:
+                if ext == ".csv":
+                    return pd.read_csv(fpath)
+                elif ext == ".json":
+                    try:
+                        return pd.read_json(fpath, orient='records')
+                    except ValueError:
+                        logger.warning("Failed to read JSON with orient='records', trying default.")
+                        return pd.read_json(fpath) # Fallback
+
+            elif ext in ARRAY_READ_FORMATS:
+                if ext == ".npz":
+                    # np.load returns a lazy NpzFile object, convert to dict
+                    npz_data = np.load(fpath)
+                    # Create a standard dictionary from the NpzFile object
+                    data_dict = {key: npz_data[key] for key in npz_data.files}
+                    npz_data.close() # Good practice to close the file handle
+                    return data_dict
+
+            elif ext in AUDIO_READ_FORMATS:
+                # Delegate to audio loader
+                logger.debug(f"Detected audio format '{ext}', delegating to audio loader.")
+                return load_audio_file(fpath, sr=sr) # Pass sr argument
 
         except Exception as e:
             logger.error(f"Error reading file {fpath}: {e}")
             raise
-    # Should not be reached if logic is correct
+
+    # Should not be reached
     raise RuntimeError("Unexpected error in read_data function.")
 
 
-def save_data(data: Union[pd.DataFrame, NDArray[Any], Dict[str, NDArray[Any]]], output_path: Union[str, Path]):
+def save_data(
+    data: SaveInput,
+    output_path: Union[str, Path],
+    sr: Optional[int] = None, # Required when saving audio tuple
+    audio_subtype: Optional[str] = 'PCM_16' # Default audio subtype
+):
     """
-    Saves data (Pandas DataFrame, NumPy array/dict) to a specified file format.
-    Handles CSV, JSON, NPZ.
+    Saves data to a specified file format.
+
+    - Saves Pandas DataFrame to CSV/JSON.
+    - Saves NumPy array or dict of arrays to NPZ.
+    - Saves audio tuple (data: ndarray, sr: int) to WAV/FLAC/OGG.
 
     Args:
-        data: The data to save. Can be a DataFrame, a single NumPy array,
-              or a dictionary of NumPy arrays (for NPZ).
+        data: The data to save (DataFrame, ndarray, dict, or audio tuple).
         output_path: Path to the output file.
+        sr: Sampling rate (required only when saving audio data tuple).
+        audio_subtype: Subtype for saving audio files (e.g., 'PCM_16', 'FLOAT').
 
     Raises:
-        ValueError: If the output format is not supported or data type is incompatible.
-        Exception: For Pandas/NumPy writing errors.
+        ValueError: If output format/data type mismatch, or missing required args (like sr for audio).
+        Exception: For underlying write errors.
     """
     fpath = Path(output_path)
     ext = fpath.suffix.lower()
     logger.info(f"Saving data to: {fpath} (format: {ext})")
 
     if ext not in SUPPORTED_WRITE_FORMATS:
-         # Check if it's an audio format handled elsewhere
-        if ext not in [".wav", ".flac", ".ogg"]: # Add other audio formats if needed
-            raise ValueError(f"Unsupported output file format: '{ext}'. "
-                             f"Supported: {SUPPORTED_WRITE_FORMATS}. "
-                             f"Use audio saving functions for audio files.")
-        else:
-             raise ValueError(f"Attempted to save data as audio file '{ext}' with generic save_data. Use audio saving functions.")
-
+         raise ValueError(f"Unsupported output file format: '{ext}'. Supported: {SUPPORTED_WRITE_FORMATS}")
 
     try:
         # Ensure output directory exists
         fpath.parent.mkdir(parents=True, exist_ok=True)
 
         if isinstance(data, pd.DataFrame):
-            if ext == ".csv":
-                data.to_csv(fpath, index=False)
-            elif ext == ".json":
-                data.to_json(fpath, orient="records", indent=2)
-            elif ext == ".npz":
-                 # Convert DataFrame to dict of arrays for saving
+            if ext in TABULAR_WRITE_FORMATS:
+                if ext == ".csv":
+                    data.to_csv(fpath, index=False)
+                elif ext == ".json":
+                    data.to_json(fpath, orient="records", indent=2)
+            elif ext in ARRAY_WRITE_FORMATS and ext == ".npz":
+                 logger.debug("Converting DataFrame to dict of arrays for NPZ saving.")
                  np.savez(fpath, **{col: data[col].values for col in data.columns})
             else:
-                 raise ValueError(f"Cannot save DataFrame to format '{ext}'.") # Should be caught earlier
+                 raise ValueError(f"Cannot save DataFrame to format '{ext}'. Supported: {TABULAR_WRITE_FORMATS | {'.npz'}}")
+
         elif isinstance(data, np.ndarray):
-             if ext == ".npz":
-                 # Save single array with a default key 'data'
+             if ext in ARRAY_WRITE_FORMATS and ext == ".npz":
+                 logger.debug("Saving single NumPy array to NPZ with key 'data'.")
                  np.savez(fpath, data=data)
-             elif ext == ".csv":
-                 # Convert 1D/2D array to DataFrame for saving
+             elif ext in TABULAR_WRITE_FORMATS and ext == ".csv":
+                 logger.debug("Converting NumPy array to DataFrame for CSV saving.")
                  if data.ndim == 1:
                      pd.DataFrame(data, columns=['value']).to_csv(fpath, index=False)
                  elif data.ndim == 2:
-                     pd.DataFrame(data).to_csv(fpath, index=False, header=False) # No header for generic array
+                     pd.DataFrame(data).to_csv(fpath, index=False, header=False)
                  else:
                      raise ValueError("Cannot save NumPy array with >2 dimensions as CSV.")
-             elif ext == ".json":
-                  raise ValueError("Direct saving of NumPy array to JSON is not supported via save_data. Convert to DataFrame or list first.")
              else:
-                 raise ValueError(f"Cannot save NumPy array to format '{ext}'.")
+                 raise ValueError(f"Cannot save NumPy array directly to format '{ext}'. Use NPZ or CSV.")
+
         elif isinstance(data, dict) and all(isinstance(v, np.ndarray) for v in data.values()):
-             if ext == ".npz":
+             if ext in ARRAY_WRITE_FORMATS and ext == ".npz":
+                 logger.debug("Saving dictionary of NumPy arrays to NPZ.")
                  np.savez(fpath, **data)
              else:
                  raise ValueError(f"Cannot save dictionary of NumPy arrays to format '{ext}'. Use NPZ.")
+
+        elif isinstance(data, tuple) and len(data) == 2 and isinstance(data[0], np.ndarray) and isinstance(data[1], int):
+             # Assume it's audio data (ndarray, sr)
+             if ext in AUDIO_WRITE_FORMATS:
+                 logger.debug(f"Detected audio data tuple, delegating to audio saver.")
+                 audio_data, audio_sr = data
+                 # Use the provided sr if available, otherwise use the one from the tuple
+                 save_sr = sr if sr is not None else audio_sr
+                 if save_sr is None: # Check again after potential override
+                      raise ValueError("Sampling rate 'sr' must be provided when saving audio data tuple.")
+                 save_audio_file(audio_data, save_sr, fpath, subtype=audio_subtype)
+             else:
+                  raise ValueError(f"Cannot save audio data tuple to non-audio format '{ext}'. Supported: {AUDIO_WRITE_FORMATS}")
+
         else:
             raise TypeError(f"Unsupported data type for saving: {type(data)}. "
-                            "Expected DataFrame, NumPy array, or dict of NumPy arrays.")
+                            f"Expected DataFrame, NumPy array, dict of arrays, or audio tuple (ndarray, sr).")
 
     except Exception as e:
         logger.error(f"Error saving file {fpath}: {e}")
         raise
 
+
+# --- SQL and Filtering (Unchanged) ---
 
 def run_sql_query(data: pd.DataFrame, query: str) -> pd.DataFrame:
     """
@@ -180,10 +224,8 @@ def run_sql_query(data: pd.DataFrame, query: str) -> pd.DataFrame:
     """
     logger.info(f"Running SQL query: {query}")
     try:
-        # pandasql uses a temporary SQLite database in memory
         env = {'df': data}
         result = ps.sqldf(query, env)
-        # Ensure result is a DataFrame, even if query returns scalar/empty
         if not isinstance(result, pd.DataFrame):
              logger.warning(f"SQL query did not return a DataFrame (returned {type(result)}). Returning empty DataFrame.")
              return pd.DataFrame()
@@ -213,33 +255,3 @@ def filter_data(data: pd.DataFrame, filter_expr: str) -> pd.DataFrame:
     except Exception as e:
         logger.error(f"Data filtering failed: {e}\nExpression: {filter_expr}")
         raise
-
-# --- Normalization (Example - move to ml_utils later?) ---
-
-def normalize_column(data: pd.DataFrame, column_name: str) -> pd.Series:
-    """
-    Normalizes a specific column in a DataFrame to the range [0, 1].
-
-    Args:
-        data: Input DataFrame.
-        column_name: Name of the column to normalize.
-
-    Returns:
-        A Pandas Series with the normalized data.
-
-    Raises:
-        KeyError: If the column_name does not exist.
-    """
-    if column_name not in data.columns:
-        raise KeyError(f"Column '{column_name}' not found in DataFrame.")
-
-    logger.debug(f"Normalizing column: {column_name}")
-    col = data[column_name]
-    min_val = col.min()
-    max_val = col.max()
-    range_val = max_val - min_val
-    if range_val == 0:
-        logger.warning(f"Column '{column_name}' has zero range. Returning original data.")
-        # Avoid division by zero, return 0.5 or original data? Returning original for now.
-        return col
-    return (col - min_val) / range_val
