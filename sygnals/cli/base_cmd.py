@@ -13,39 +13,70 @@ from sygnals.utils.logging_config import setup_logging
 
 logger = logging.getLogger(__name__)
 
-class ConfigCommand(click.Command):
+# Rename to ConfigGroup and inherit from click.Group
+class ConfigGroup(click.Group):
     """
-    A custom Click command that loads configuration and sets up logging.
+    A custom Click Group that loads configuration and sets up logging
+    before invoking the group or its subcommands.
     Passes the config object via the context.
     """
     def invoke(self, ctx: click.Context):
+        """
+        Overrides the default invoke method to set up config and logging first.
+        """
+        # Ensure ctx.obj is initialized if not already done (e.g., by parent group)
+        if ctx.obj is None:
+             ctx.obj = {} # Initialize as dict, can store config here
+
         # 1. Load Configuration
-        # Allow overriding config file via CLI option in the future if needed
-        config = load_configuration()
-        ctx.obj = config # Store config in context object
+        # Check if config is already loaded (e.g., if nested groups use this)
+        if not isinstance(ctx.obj, SygnalsConfig):
+            config = load_configuration()
+            ctx.obj = config # Store config in context object
+            config_loaded_here = True
+        else:
+            config = ctx.obj # Config already loaded by a parent group
+            config_loaded_here = False
+            logger.debug("Configuration already loaded in context.")
+
 
         # 2. Setup Logging based on verbosity options from context
-        verbosity = 0
-        if ctx.params.get('verbose', 0) > 0:
-            verbosity = ctx.params['verbose']
-        if ctx.params.get('quiet', False):
-            verbosity = -1
+        # Only set up logging if this group instance loaded the config
+        # to avoid redundant setup in nested groups.
+        if config_loaded_here:
+            verbosity = 0
+            # Check params on the current context first
+            if ctx.params.get('verbose', 0) > 0:
+                verbosity = ctx.params['verbose']
+            if ctx.params.get('quiet', False):
+                verbosity = -1
+            # If not found, check parent context (might be needed if options are on top-level group)
+            elif ctx.parent and ctx.parent.params.get('verbose', 0) > 0:
+                 verbosity = ctx.parent.params['verbose']
+            elif ctx.parent and ctx.parent.params.get('quiet', False):
+                 verbosity = -1
 
-        try:
-            setup_logging(config, verbosity)
-            logger.debug("Config and logging setup complete in ConfigCommand.")
-        except Exception as e:
-            # Use basic print for critical errors during setup
-            print(f"CRITICAL ERROR during logging setup: {e}", file=sys.stderr)
-            # Optionally re-raise or exit
-            # raise # Or sys.exit(1)
 
-        # 3. Proceed with the actual command invocation
+            try:
+                setup_logging(config, verbosity)
+                logger.debug("Config and logging setup complete in ConfigGroup.")
+            except Exception as e:
+                # Use basic print for critical errors during setup
+                print(f"CRITICAL ERROR during logging setup: {e}", file=sys.stderr)
+                # Optionally re-raise or exit
+                # raise # Or sys.exit(1)
+        else:
+             logger.debug("Skipping logging setup; already done by parent group.")
+
+        # 3. Proceed with the actual group/command invocation
         try:
+            # Call the superclass's invoke method to handle command dispatching
             return super().invoke(ctx)
         except Exception as e:
             # Log unhandled exceptions before exiting
-            logger.critical(f"Unhandled exception in command execution: {e}", exc_info=True)
+            # Use the logger potentially configured above
+            exc_logger = logging.getLogger("sygnals.cli.error")
+            exc_logger.critical(f"Unhandled exception during command execution: {e}", exc_info=True)
             # Optionally re-raise or exit with error code
             sys.exit(1) # Exit with non-zero code on error
 
