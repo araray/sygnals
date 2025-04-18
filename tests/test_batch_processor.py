@@ -4,6 +4,7 @@ import pytest
 import pandas as pd
 import numpy as np
 from pathlib import Path # Use pathlib
+from typing import Tuple, Optional, Union, Literal, Dict
 
 # Import the function to test
 from sygnals.core.batch_processor import process_batch

@@ -8,6 +8,7 @@ import logging
 import numpy as np
 from numpy.typing import NDArray
 from scipy.signal import fftconvolve # Use FFT-based convolution for efficiency
+from typing import Tuple, Optional, Union, Literal, Dict
 
 logger = logging.getLogger(__name__)
 

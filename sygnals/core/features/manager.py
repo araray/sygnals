@@ -18,8 +18,15 @@ from typing import List, Dict, Any, Optional, Tuple, Union
 from .time_domain import TIME_DOMAIN_FEATURES
 from .frequency_domain import FREQUENCY_DOMAIN_FEATURES, spectral_contrast
 from .cepstral import CEPSTRAL_FEATURES, mfcc
-# Import audio features that are often calculated per frame
-from ..audio.features import zero_crossing_rate, rms_energy
+# Import audio features that are often calculated per frame or need special handling
+from ..audio.features import (
+    zero_crossing_rate,
+    rms_energy,
+    harmonic_to_noise_ratio, # Placeholder
+    jitter,                  # Placeholder
+    shimmer                  # Placeholder
+)
+
 
 # Import DSP functions needed for spectral features (if not using librosa's versions)
 # from ..dsp import compute_fft # Example if using custom FFT
@@ -34,11 +41,17 @@ _AVAILABLE_FEATURES_DICT["zero_crossing_rate"] = zero_crossing_rate
 _AVAILABLE_FEATURES_DICT["rms_energy"] = rms_energy
 # Add frequency-domain features (that operate per-frame on spectrum)
 _AVAILABLE_FEATURES_DICT.update(FREQUENCY_DOMAIN_FEATURES)
+# Add placeholder audio features
+_AVAILABLE_FEATURES_DICT["hnr"] = harmonic_to_noise_ratio
+_AVAILABLE_FEATURES_DICT["jitter"] = jitter
+_AVAILABLE_FEATURES_DICT["shimmer"] = shimmer
 # Add cepstral features (MFCC handled specially below)
 # _AVAILABLE_FEATURES_DICT.update(CEPSTRAL_FEATURES) # MFCC needs special handling
 
-# List features requiring special handling (e.g., operate on full spectrogram)
+# List features requiring special handling (e.g., operate on full spectrogram or signal)
 _SPECIAL_HANDLING_FEATURES = {"mfcc", "spectral_contrast"}
+# Add placeholders here if they need signal-level calculation later, but for now treat as frame-based
+# _PLACEHOLDER_FEATURES = {"hnr", "jitter", "shimmer"}
 
 
 class FeatureExtractionError(Exception):
@@ -99,7 +112,10 @@ def extract_features(
 
     # --- Handle 'all' features request ---
     if features == ['all']:
+        # Combine standard features and special handling ones
         features = list(_AVAILABLE_FEATURES_DICT.keys()) + list(_SPECIAL_HANDLING_FEATURES)
+        # Remove duplicates if any feature exists in both
+        features = sorted(list(set(features)))
         logger.info(f"Extracting all available features: {features}")
 
     # --- Input Validation ---
@@ -208,20 +224,38 @@ def extract_features(
         params = feature_params.get(feature_name, {})
 
         try:
-            # --- Handle frame-based features (Time, ZCR, RMS) ---
-            if feature_name in TIME_DOMAIN_FEATURES or feature_name in ["zero_crossing_rate", "rms_energy"]:
+            # --- Handle frame-based features (Time, ZCR, RMS, Placeholders) ---
+            # Check if feature is in the main dictionary (includes time-domain, basic audio, placeholders)
+            if feature_name in _AVAILABLE_FEATURES_DICT:
                 func = _AVAILABLE_FEATURES_DICT[feature_name]
-                # Check if function needs frame/hop lengths (like ZCR, RMS) passed to librosa
-                if feature_name in ["zero_crossing_rate", "rms_energy"]:
-                     # These are calculated by librosa over the whole signal using internal framing
-                     feature_result = func(y=y, sr=sr, frame_length=frame_length, hop_length=hop_length, center=center, **params)
+                # Features calculated by librosa over the whole signal (ZCR, RMS, Placeholders)
+                # These functions handle their own framing based on provided args
+                if feature_name in ["zero_crossing_rate", "rms_energy", "hnr", "jitter", "shimmer"]:
+                     # Pass necessary framing parameters if the function needs them
+                     func_params = {
+                         'frame_length': frame_length,
+                         'hop_length': hop_length,
+                         'center': center,
+                         **params # Add feature-specific params
+                     }
+                     # Jitter might need f0, but placeholder doesn't use it yet
+                     # if feature_name == 'jitter' and 'f0' in results: # Example dependency
+                     #     func_params['f0'] = results['f0']
+
+                     feature_result = func(y=y, sr=sr, **func_params)
                      # Ensure result length matches num_frames derived from STFT/framing
                      if len(feature_result) != num_frames:
                           logger.warning(f"Length mismatch for {feature_name} ({len(feature_result)} vs {num_frames}). Adjusting.")
-                          feature_result = feature_result[:num_frames] # Truncate/pad if needed (simple approach)
+                          # Simple truncation/padding - might need refinement
+                          if len(feature_result) > num_frames:
+                              feature_result = feature_result[:num_frames]
+                          else:
+                              # Pad with the last value or NaN? Use NaN for placeholders.
+                              pad_val = np.nan if feature_name in ["hnr", "jitter", "shimmer"] else feature_result[-1] if len(feature_result)>0 else 0
+                              feature_result = np.pad(feature_result, (0, num_frames - len(feature_result)), mode='constant', constant_values=pad_val)
                      results[feature_name] = feature_result
                 else:
-                    # Apply other time-domain features frame-by-frame using our framed signal
+                    # Apply other time-domain features frame-by-frame using our pre-calculated frames
                     feature_result = np.array([func(frames[:, i], **params) for i in range(num_frames)])
                     results[feature_name] = feature_result
                 processed_features.add(feature_name)
@@ -247,7 +281,8 @@ def extract_features(
                  n_bands_contrast = feature_result.shape[0] - 1
                  for i in range(n_bands_contrast):
                      band_name = f"contrast_band_{i}"
-                     results[band_name] = feature_result[i, :num_frames] # Ensure length matches
+                     # Ensure length matches num_frames after potential STFT adjustment
+                     results[band_name] = feature_result[i, :num_frames]
                      processed_features.add(band_name)
                  delta_name = "contrast_delta"
                  results[delta_name] = feature_result[n_bands_contrast, :num_frames] # Overall contrast
@@ -272,7 +307,8 @@ def extract_features(
                  n_mfcc_coeffs = feature_result.shape[0]
                  for i in range(n_mfcc_coeffs):
                      mfcc_name = f"mfcc_{i}"
-                     results[mfcc_name] = feature_result[i, :num_frames] # Ensure length matches
+                     # Ensure length matches num_frames after potential STFT adjustment
+                     results[mfcc_name] = feature_result[i, :num_frames]
                      processed_features.add(mfcc_name)
                  processed_features.add(feature_name) # Mark original request as processed
 
@@ -304,7 +340,7 @@ def extract_features(
              final_results[name] = padded_arr
         else:
              # This case might occur if a feature function returns unexpected shape
-             logger.error(f"Feature '{name}' has unexpected shape {arr.shape} or length. Skipping.")
+             logger.error(f"Feature '{name}' has unexpected shape {arr.shape} or length != {num_frames}. Skipping.")
 
     # Add time array for dict output
     if output_format == 'dict_of_arrays':

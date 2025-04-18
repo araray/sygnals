@@ -7,6 +7,7 @@ Implementation of a basic audio delay effect.
 import logging
 import numpy as np
 from numpy.typing import NDArray
+from typing import Tuple, Optional, Union, Literal, Dict
 
 logger = logging.getLogger(__name__)
 

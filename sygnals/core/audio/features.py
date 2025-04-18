@@ -156,6 +156,113 @@ def fundamental_frequency(
         logger.error(f"Error estimating fundamental frequency: {e}")
         raise
 
+# --- Voice Quality Features (Placeholders) ---
+
+def harmonic_to_noise_ratio(
+    y: NDArray[np.float64],
+    sr: int,
+    frame_length: int = 2048, # Parameters might be needed for actual implementation
+    hop_length: int = 512,
+    **kwargs: Any
+) -> NDArray[np.float64]:
+    """
+    Estimates the Harmonic-to-Noise Ratio (HNR) [Placeholder].
+
+    HNR measures the ratio of harmonic energy (related to periodic, pitched sound)
+    to noise energy (related to aperiodic or random components) in the signal,
+    often used as an indicator of voice quality (e.g., hoarseness).
+
+    NOTE: This is a placeholder implementation and returns an array of NaNs.
+          A real implementation would likely involve autocorrelation or cepstral analysis.
+
+    Args:
+        y: Audio time series (float64).
+        sr: Sampling rate.
+        frame_length: Analysis frame length (samples).
+        hop_length: Hop length between frames (samples).
+        **kwargs: Additional parameters for future implementation.
+
+    Returns:
+        An array of NaNs with the expected length based on framing.
+    """
+    logger.warning("harmonic_to_noise_ratio feature is a placeholder and returns NaN.")
+    # Calculate expected number of frames to return NaN array of correct size
+    num_frames = len(librosa.util.frame(y, frame_length=frame_length, hop_length=hop_length)[0])
+    return np.full(num_frames, np.nan, dtype=np.float64)
+
+def jitter(
+    y: NDArray[np.float64],
+    sr: int,
+    f0: Optional[NDArray[np.float64]] = None, # Requires fundamental frequency estimates
+    method: str = 'local', # Common methods: 'local', 'rap', 'ppq5'
+    **kwargs: Any
+) -> NDArray[np.float64]:
+    """
+    Estimates the frequency jitter (periodicity variations) [Placeholder].
+
+    Jitter refers to the short-term variations in the fundamental frequency (F0)
+    of voiced speech. It's often used as a measure of voice instability or roughness.
+    Calculation typically requires accurate F0 estimates.
+
+    NOTE: This is a placeholder implementation and returns an array of NaNs.
+          A real implementation requires F0 tracking and period difference calculations.
+
+    Args:
+        y: Audio time series (float64).
+        sr: Sampling rate.
+        f0: Optional pre-computed fundamental frequency contour (Hz). If None,
+            it would need to be calculated internally (not done in placeholder).
+        method: Jitter calculation method (e.g., 'local', 'rap').
+        **kwargs: Additional parameters for future implementation.
+
+    Returns:
+        An array of NaNs with the expected length based on F0 contour or framing.
+    """
+    logger.warning("jitter feature is a placeholder and returns NaN.")
+    # Determine output length based on f0 if provided, otherwise based on standard framing
+    if f0 is not None:
+        num_frames = len(f0)
+    else:
+        # Estimate based on default framing if f0 is not available
+        frame_length = kwargs.get('frame_length', 2048)
+        hop_length = kwargs.get('hop_length', 512)
+        num_frames = len(librosa.util.frame(y, frame_length=frame_length, hop_length=hop_length)[0])
+    return np.full(num_frames, np.nan, dtype=np.float64)
+
+def shimmer(
+    y: NDArray[np.float64],
+    sr: int,
+    frame_length: int = 2048, # Parameters might be needed for actual implementation
+    hop_length: int = 512,
+    method: str = 'local_db', # Common methods: 'local', 'local_db', 'apq11'
+    **kwargs: Any
+) -> NDArray[np.float64]:
+    """
+    Estimates the amplitude shimmer (amplitude variations) [Placeholder].
+
+    Shimmer refers to the short-term variations in the amplitude of voiced speech
+    peaks. It's another measure often associated with voice quality and perceived roughness.
+
+    NOTE: This is a placeholder implementation and returns an array of NaNs.
+          A real implementation requires peak amplitude tracking within voiced segments.
+
+    Args:
+        y: Audio time series (float64).
+        sr: Sampling rate.
+        frame_length: Analysis frame length (samples).
+        hop_length: Hop length between frames (samples).
+        method: Shimmer calculation method (e.g., 'local', 'local_db').
+        **kwargs: Additional parameters for future implementation.
+
+    Returns:
+        An array of NaNs with the expected length based on framing.
+    """
+    logger.warning("shimmer feature is a placeholder and returns NaN.")
+    # Calculate expected number of frames to return NaN array of correct size
+    num_frames = len(librosa.util.frame(y, frame_length=frame_length, hop_length=hop_length)[0])
+    return np.full(num_frames, np.nan, dtype=np.float64)
+
+
 # --- Other Audio Metrics (from old audio_handler) ---
 
 def get_basic_audio_metrics(y: NDArray[np.float64], sr: int) -> Dict[str, Any]:
@@ -178,8 +285,8 @@ def get_basic_audio_metrics(y: NDArray[np.float64], sr: int) -> Dict[str, Any]:
     try:
         duration_seconds = librosa.get_duration(y=y, sr=sr)
         # Calculate global RMS (note: different from frame-based RMS energy)
-        rms_global = np.sqrt(np.mean(y**2))
-        peak_amplitude = np.max(np.abs(y))
+        rms_global = np.sqrt(np.mean(y**2)) if y.size > 0 else 0.0
+        peak_amplitude = np.max(np.abs(y)) if y.size > 0 else 0.0
 
         return {
             "duration_seconds": float(duration_seconds),
@@ -190,7 +297,7 @@ def get_basic_audio_metrics(y: NDArray[np.float64], sr: int) -> Dict[str, Any]:
         logger.error(f"Error calculating basic audio metrics: {e}")
         raise
 
-# --- Add more features as needed: HNR, Jitter, Shimmer, Onset Detection ---
+# --- Add more features as needed: Onset Detection ---
 # Example: Onset Detection (using librosa)
 def detect_onsets(
     y: NDArray[np.float64],

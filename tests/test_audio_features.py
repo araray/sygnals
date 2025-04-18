@@ -16,7 +16,9 @@ from sygnals.core.audio.features import (
     fundamental_frequency,
     get_basic_audio_metrics,
     detect_onsets,
-    # Import other features as they are added
+    harmonic_to_noise_ratio, # Placeholder
+    jitter,                  # Placeholder
+    shimmer                  # Placeholder
 )
 
 # --- Test Fixtures ---
@@ -164,4 +166,52 @@ def test_detect_onsets(sine_wave_audio):
     assert len(onset_times) == len(expected_times)
     assert_allclose(onset_times, expected_times, atol=0.05) # Allow 50ms tolerance
 
-# --- Add tests for other audio features (HNR, Jitter, Shimmer, etc.) as implemented ---
+
+# --- Tests for Placeholder Features ---
+
+def test_hnr_placeholder(sine_wave_audio):
+    """Test the harmonic_to_noise_ratio placeholder."""
+    signal, sr = sine_wave_audio
+    frame_length = 1024
+    hop_length = 512
+    hnr_result = harmonic_to_noise_ratio(signal, sr, frame_length=frame_length, hop_length=hop_length)
+    assert hnr_result.ndim == 1
+    assert hnr_result.dtype == np.float64
+    # Check that all values are NaN
+    assert np.all(np.isnan(hnr_result))
+    # Check length matches expected number of frames
+    expected_num_frames = len(librosa.util.frame(signal, frame_length=frame_length, hop_length=hop_length)[0])
+    assert len(hnr_result) == expected_num_frames
+
+
+def test_jitter_placeholder(sine_wave_audio):
+    """Test the jitter placeholder."""
+    signal, sr = sine_wave_audio
+    frame_length = 1024
+    hop_length = 512
+    jitter_result = jitter(signal, sr, frame_length=frame_length, hop_length=hop_length)
+    assert jitter_result.ndim == 1
+    assert jitter_result.dtype == np.float64
+    # Check that all values are NaN
+    assert np.all(np.isnan(jitter_result))
+    # Check length matches expected number of frames
+    expected_num_frames = len(librosa.util.frame(signal, frame_length=frame_length, hop_length=hop_length)[0])
+    assert len(jitter_result) == expected_num_frames
+
+
+def test_shimmer_placeholder(sine_wave_audio):
+    """Test the shimmer placeholder."""
+    signal, sr = sine_wave_audio
+    frame_length = 1024
+    hop_length = 512
+    shimmer_result = shimmer(signal, sr, frame_length=frame_length, hop_length=hop_length)
+    assert shimmer_result.ndim == 1
+    assert shimmer_result.dtype == np.float64
+    # Check that all values are NaN
+    assert np.all(np.isnan(shimmer_result))
+    # Check length matches expected number of frames
+    expected_num_frames = len(librosa.util.frame(signal, frame_length=frame_length, hop_length=hop_length)[0])
+    assert len(shimmer_result) == expected_num_frames
+
+
+# --- Add tests for other audio features as implemented ---
