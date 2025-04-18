@@ -2,32 +2,43 @@
 
 """
 Manages the extraction of various features from signal data.
-Handles framing, calling appropriate feature functions, and aggregating results.
+Handles framing, calculation of intermediate representations like spectrograms,
+calling appropriate feature functions, and aggregating results.
 """
 
 import logging
 import numpy as np
 import pandas as pd
+import librosa # Needed for framing, time/frequency utils, and some features
 from numpy.typing import NDArray
-from typing import List, Dict, Any, Optional, Tuple
+# Import necessary types
+from typing import List, Dict, Any, Optional, Tuple, Union
 
-# Import feature dictionaries and functions
+# Import feature dictionaries and specific functions needed for dispatch
 from .time_domain import TIME_DOMAIN_FEATURES
 from .frequency_domain import FREQUENCY_DOMAIN_FEATURES, spectral_contrast
 from .cepstral import CEPSTRAL_FEATURES, mfcc
-from ..audio.features import zero_crossing_rate, rms_energy # Import audio features directly if needed
+# Import audio features that are often calculated per frame
+from ..audio.features import zero_crossing_rate, rms_energy
 
-# Import DSP functions needed for spectral features
-from ..dsp import compute_fft
+# Import DSP functions needed for spectral features (if not using librosa's versions)
+# from ..dsp import compute_fft # Example if using custom FFT
 
 logger = logging.getLogger(__name__)
 
-# Combine available features (excluding those needing special handling like MFCC/Contrast initially)
-# Manager will decide how to call these based on requirements (frame vs spectrogram)
-AVAILABLE_FEATURES = {**TIME_DOMAIN_FEATURES}
-# Add audio features that operate per-frame
-AVAILABLE_FEATURES["zero_crossing_rate"] = zero_crossing_rate
-AVAILABLE_FEATURES["rms_energy"] = rms_energy
+# Combine available features for easier lookup and validation
+# Start with time-domain features
+_AVAILABLE_FEATURES_DICT = {**TIME_DOMAIN_FEATURES}
+# Add frame-based audio features
+_AVAILABLE_FEATURES_DICT["zero_crossing_rate"] = zero_crossing_rate
+_AVAILABLE_FEATURES_DICT["rms_energy"] = rms_energy
+# Add frequency-domain features (that operate per-frame on spectrum)
+_AVAILABLE_FEATURES_DICT.update(FREQUENCY_DOMAIN_FEATURES)
+# Add cepstral features (MFCC handled specially below)
+# _AVAILABLE_FEATURES_DICT.update(CEPSTRAL_FEATURES) # MFCC needs special handling
+
+# List features requiring special handling (e.g., operate on full spectrogram)
+_SPECIAL_HANDLING_FEATURES = {"mfcc", "spectral_contrast"}
 
 
 class FeatureExtractionError(Exception):
@@ -45,32 +56,37 @@ def extract_features(
     window: str = "hann",
     feature_params: Optional[Dict[str, Dict[str, Any]]] = None,
     output_format: str = 'dataframe' # 'dataframe' or 'dict_of_arrays'
-) -> Union[pd.DataFrame, Dict[str, NDArray[np.float64]]]:
+) -> Union[pd.DataFrame, Dict[str, NDArray[Any]]]:
     """
     Extracts specified features from an audio signal.
 
-    Handles framing, FFT calculation (if needed), calling feature functions,
-    and formatting the output.
+    Handles framing, FFT/Mel spectrogram calculation (if needed), calling appropriate
+    feature functions (frame-based or spectrogram-based), and formatting the output.
 
     Args:
-        y: Input audio time series (float64).
-        sr: Sampling rate.
+        y: Input audio time series (1D NumPy array, float64).
+        sr: Sampling rate (Hz).
         features: List of feature names to extract (e.g., ['rms_energy', 'spectral_centroid', 'mfcc']).
-        frame_length: Analysis frame length in samples.
-        hop_length: Hop length between frames in samples.
-        center: Whether to pad the signal so frames are centered.
-        window: Window function to apply for FFT-based features.
+                  Use 'all' to attempt extraction of all known standard features.
+        frame_length: Analysis frame length in samples (default: 2048).
+        hop_length: Hop length between frames in samples (default: 512).
+        center: Whether to pad the signal so frames are centered (default: True).
+        window: Window function to apply for FFT-based features (default: "hann").
         feature_params: Dictionary containing parameters specific to certain features.
+                        Keys are feature names, values are dictionaries of parameters.
                         Example: {'mfcc': {'n_mfcc': 20}, 'spectral_rolloff': {'roll_percent': 0.9}}
         output_format: Format for the returned features ('dataframe' or 'dict_of_arrays').
+                       'dataframe': Returns a Pandas DataFrame indexed by time.
+                       'dict_of_arrays': Returns a dictionary where keys are feature names
+                                         (including 'time') and values are NumPy arrays.
 
     Returns:
         A Pandas DataFrame or a dictionary of NumPy arrays containing the extracted features.
-        DataFrame index/keys correspond to frame times. Dictionary keys are feature names.
+        DataFrame index or 'time' key in dictionary corresponds to frame times (in seconds).
 
     Raises:
-        ValueError: If an unknown feature is requested.
-        FeatureExtractionError: If an error occurs during extraction.
+        ValueError: If an unknown feature is requested or parameters are invalid.
+        FeatureExtractionError: If an error occurs during any stage of extraction.
     """
     logger.info(f"Starting feature extraction for features: {features}")
     logger.debug(f"Parameters: sr={sr}, frame={frame_length}, hop={hop_length}, center={center}, window={window}")
@@ -78,80 +94,112 @@ def extract_features(
         logger.debug(f"Feature-specific parameters: {feature_params}")
 
     feature_params = feature_params or {}
-    results: Dict[str, NDArray[np.float64]] = {}
-    processed_features = set()
+    results: Dict[str, NDArray[Any]] = {} # Store results here, key=feature_name, value=array
+    processed_features = set() # Track which features (including derived ones like mfcc_0) are done
+
+    # --- Handle 'all' features request ---
+    if features == ['all']:
+        features = list(_AVAILABLE_FEATURES_DICT.keys()) + list(_SPECIAL_HANDLING_FEATURES)
+        logger.info(f"Extracting all available features: {features}")
 
     # --- Input Validation ---
-    unknown_features = [f for f in features if f not in AVAILABLE_FEATURES and f not in CEPSTRAL_FEATURES and f != "spectral_contrast"]
+    all_known_features = set(_AVAILABLE_FEATURES_DICT.keys()) | _SPECIAL_HANDLING_FEATURES
+    unknown_features = [f for f in features if f not in all_known_features]
     if unknown_features:
-        available = list(AVAILABLE_FEATURES.keys()) + list(CEPSTRAL_FEATURES.keys()) + ["spectral_contrast"]
-        raise ValueError(f"Unknown feature(s) requested: {unknown_features}. Available: {available}")
+        raise ValueError(f"Unknown feature(s) requested: {unknown_features}. Available: {sorted(list(all_known_features))}")
 
     # --- Framing ---
-    # Use librosa.util.frame for consistency with feature functions
+    # Use librosa.util.frame for consistency with feature functions that might use it
     try:
-        frames = librosa.util.frame(y, frame_length=frame_length, hop_length=hop_length)
+        # Note: librosa.util.frame doesn't handle centering padding itself.
+        # Centering is handled by librosa.stft and feature functions like rms/zcr.
+        # We frame the original signal here mainly for time-domain features that need raw frames.
+        if center:
+            # Pad signal for centering before framing if needed by time-domain funcs
+            pad_width = frame_length // 2
+            y_padded = np.pad(y, pad_width, mode='constant') # Pad with zeros for framing
+            frames = librosa.util.frame(y_padded, frame_length=frame_length, hop_length=hop_length)
+        else:
+            frames = librosa.util.frame(y, frame_length=frame_length, hop_length=hop_length)
+
         # frames shape is (frame_length, num_frames)
         num_frames = frames.shape[1]
+        if num_frames == 0:
+            logger.warning("Signal is too short for the given frame/hop length, no frames generated.")
+            return pd.DataFrame() if output_format == 'dataframe' else {'time': np.array([])}
         logger.debug(f"Signal framed into {num_frames} frames.")
     except Exception as e:
         raise FeatureExtractionError(f"Error during signal framing: {e}")
 
-    # Calculate frame times (useful for DataFrame index)
-    frame_times = librosa.times_like(frames[0], sr=sr, hop_length=hop_length, n_fft=frame_length) # Use frame_length for n_fft reference if centered
+    # Calculate frame times (center times of frames)
+    # Use n_fft=frame_length as reference for time calculation if centering
+    frame_times = librosa.times_like(frames[0], sr=sr, hop_length=hop_length, n_fft=frame_length if center else None)
+    # Ensure frame_times has the correct length matching num_frames
+    if len(frame_times) != num_frames:
+         logger.warning(f"Mismatch between number of frames ({num_frames}) and calculated frame times ({len(frame_times)}). Adjusting times array.")
+         # This can happen with certain edge padding cases, adjust times array length
+         frame_times = frame_times[:num_frames] # Simple truncation, might need refinement
 
     # --- Pre-calculate Spectrograms if needed ---
     S_mag: Optional[NDArray[np.float64]] = None
     S_mel_log: Optional[NDArray[np.float64]] = None
     fft_freqs: Optional[NDArray[np.float64]] = None
-    mel_freqs: Optional[NDArray[np.float64]] = None # Not directly used by MFCC but good context
+    # mel_freqs: Optional[NDArray[np.float64]] = None # Not strictly needed by MFCC func
 
-    needs_fft = any(f in FREQUENCY_DOMAIN_FEATURES for f in features) or "spectral_contrast" in features
+    # Determine if any requested feature requires FFT or Mel spectrogram
+    needs_fft_spectrum = any(f in FREQUENCY_DOMAIN_FEATURES for f in features)
+    needs_fft_spectrogram = "spectral_contrast" in features
     needs_mel = "mfcc" in features
 
-    if needs_fft or needs_mel:
+    if needs_fft_spectrum or needs_fft_spectrogram or needs_mel:
         logger.debug("Calculating STFT for spectral/cepstral features...")
         try:
-            # Calculate STFT using librosa for consistency
+            # Calculate STFT using librosa - handles windowing and centering
             stft_result = librosa.stft(
-                y,
+                y, # Use original signal `y` for librosa's STFT which handles padding
                 n_fft=frame_length, # Use frame_length as n_fft by default
                 hop_length=hop_length,
-                win_length=frame_length, # Ensure window matches frame
+                win_length=frame_length, # Ensure window matches frame if possible
                 window=window,
                 center=center,
             )
-            S_mag = np.abs(stft_result) # Magnitude spectrogram
-            fft_freqs = librosa.fft_frequencies(sr=sr, n_fft=frame_length)
+            # Ensure STFT result has expected number of frames
+            if stft_result.shape[1] != num_frames:
+                 logger.warning(f"STFT frames ({stft_result.shape[1]}) mismatch framing ({num_frames}). Using STFT frame count.")
+                 num_frames = stft_result.shape[1] # Adjust frame count based on STFT result
+                 frame_times = frame_times[:num_frames] # Adjust times accordingly
+
+            S_mag = np.abs(stft_result) # Magnitude spectrogram (n_freq_bins, n_frames)
+            fft_freqs = librosa.fft_frequencies(sr=sr, n_fft=frame_length) # Frequencies for STFT bins
             logger.debug(f"STFT calculated. Shape: {S_mag.shape}")
 
             if needs_mel:
                  logger.debug("Calculating Mel spectrogram for MFCC...")
-                 # Get MFCC specific params
+                 # Get MFCC specific params from feature_params or use librosa defaults
                  mfcc_p = feature_params.get('mfcc', {})
-                 n_mels = mfcc_p.get('n_mels', 128) # Default librosa n_mels
-                 fmin = mfcc_p.get('fmin', 0)
+                 n_mels = mfcc_p.get('n_mels', 128)
+                 fmin = mfcc_p.get('fmin', 0.0)
                  fmax = mfcc_p.get('fmax', sr / 2.0)
-                 power = mfcc_p.get('power', 2.0) # Power for melspectrogram
+                 power = mfcc_p.get('power', 2.0) # Power for melspectrogram (usually 2.0)
 
+                 # Calculate Mel spectrogram from power spectrogram (S_mag**power)
                  S_mel = librosa.feature.melspectrogram(
-                     S=S_mag**power, # Pass power spectrogram
+                     S=S_mag**power,
                      sr=sr,
-                     n_fft=frame_length, # Must match STFT n_fft
-                     hop_length=hop_length, # Must match STFT hop_length
+                     # n_fft, hop_length, win_length, window, center are inferred from S
                      n_mels=n_mels,
                      fmin=fmin,
                      fmax=fmax,
-                     # win_length, window, center are implicitly handled by S
                  )
+                 # Convert to log-power Mel spectrogram (dB scale) - common input for MFCC
                  S_mel_log = librosa.power_to_db(S_mel, ref=np.max)
-                 mel_freqs = librosa.mel_frequencies(n_mels=n_mels, fmin=fmin, fmax=fmax)
+                 # mel_freqs = librosa.mel_frequencies(n_mels=n_mels, fmin=fmin, fmax=fmax) # For context if needed
                  logger.debug(f"Log-Mel spectrogram calculated. Shape: {S_mel_log.shape}")
 
         except Exception as e:
             raise FeatureExtractionError(f"Error calculating STFT/Mel spectrogram: {e}")
 
-    # --- Extract Features ---
+    # --- Extract Features Iteratively ---
     for feature_name in features:
         if feature_name in processed_features:
             continue
@@ -160,72 +208,88 @@ def extract_features(
         params = feature_params.get(feature_name, {})
 
         try:
-            if feature_name in AVAILABLE_FEATURES:
-                func = AVAILABLE_FEATURES[feature_name]
-                # Check if function needs frame/hop lengths (like ZCR, RMS)
+            # --- Handle frame-based features (Time, ZCR, RMS) ---
+            if feature_name in TIME_DOMAIN_FEATURES or feature_name in ["zero_crossing_rate", "rms_energy"]:
+                func = _AVAILABLE_FEATURES_DICT[feature_name]
+                # Check if function needs frame/hop lengths (like ZCR, RMS) passed to librosa
                 if feature_name in ["zero_crossing_rate", "rms_energy"]:
-                     # These are calculated by librosa over the whole signal
-                     feature_result = func(y=y, frame_length=frame_length, hop_length=hop_length, center=center, **params)
-                     results[feature_name] = feature_result[:num_frames] # Ensure length matches frames
+                     # These are calculated by librosa over the whole signal using internal framing
+                     feature_result = func(y=y, sr=sr, frame_length=frame_length, hop_length=hop_length, center=center, **params)
+                     # Ensure result length matches num_frames derived from STFT/framing
+                     if len(feature_result) != num_frames:
+                          logger.warning(f"Length mismatch for {feature_name} ({len(feature_result)} vs {num_frames}). Adjusting.")
+                          feature_result = feature_result[:num_frames] # Truncate/pad if needed (simple approach)
+                     results[feature_name] = feature_result
                 else:
-                    # Apply frame-by-frame for other time-domain features
+                    # Apply other time-domain features frame-by-frame using our framed signal
                     feature_result = np.array([func(frames[:, i], **params) for i in range(num_frames)])
                     results[feature_name] = feature_result
+                processed_features.add(feature_name)
 
+            # --- Handle frequency-domain features (operating on single frame spectrum) ---
             elif feature_name in FREQUENCY_DOMAIN_FEATURES:
                 if S_mag is None or fft_freqs is None:
+                    # This should not happen if logic above is correct, but check defensively
                     raise FeatureExtractionError(f"FFT magnitude spectrum 'S_mag' not available for feature '{feature_name}'")
                 func = FREQUENCY_DOMAIN_FEATURES[feature_name]
                 # Apply frame-by-frame (column-by-column of S_mag)
                 feature_result = np.array([func(S_mag[:, i], fft_freqs, **params) for i in range(num_frames)])
                 results[feature_name] = feature_result
+                processed_features.add(feature_name)
 
+            # --- Handle spectral_contrast (operates on full spectrogram) ---
             elif feature_name == "spectral_contrast":
                  if S_mag is None:
                      raise FeatureExtractionError(f"FFT magnitude spectrum 'S_mag' not available for feature '{feature_name}'")
-                 # Needs full spectrogram S, sr, and freqs
+                 # Needs full magnitude spectrogram S, sr, and freqs
                  feature_result = spectral_contrast(S=S_mag, sr=sr, freqs=fft_freqs, **params)
                  # Result shape (n_bands+1, time), store each band as separate feature
                  n_bands_contrast = feature_result.shape[0] - 1
                  for i in range(n_bands_contrast):
-                     results[f"contrast_band_{i}"] = feature_result[i, :num_frames]
-                 results["contrast_delta"] = feature_result[n_bands_contrast, :num_frames] # Overall contrast
+                     band_name = f"contrast_band_{i}"
+                     results[band_name] = feature_result[i, :num_frames] # Ensure length matches
+                     processed_features.add(band_name)
+                 delta_name = "contrast_delta"
+                 results[delta_name] = feature_result[n_bands_contrast, :num_frames] # Overall contrast
+                 processed_features.add(delta_name)
+                 processed_features.add(feature_name) # Mark original request as processed
 
+            # --- Handle MFCC (operates on log-Mel spectrogram or signal) ---
             elif feature_name == "mfcc":
-                 if S_mel_log is None and y is None: # Need y if S_mel_log wasn't precalculated
-                     raise FeatureExtractionError(f"Neither Log-Mel spectrogram 'S_mel_log' nor signal 'y' available for feature '{feature_name}'")
-                 # Pass relevant params from feature_params['mfcc']
+                 # MFCC function itself needs either y or S (log-Mel spec)
                  mfcc_params = feature_params.get('mfcc', {})
-                 # Ensure n_fft, hop_length etc. used here match spectrogram calculation if S is used
+                 # Ensure necessary STFT params used for Mel spec are passed if recalculating inside mfcc
                  mfcc_params.setdefault('n_fft', frame_length)
                  mfcc_params.setdefault('hop_length', hop_length)
                  mfcc_params.setdefault('center', center)
-                 # Call MFCC function
-                 feature_result = mfcc(y=y, sr=sr, S=S_mel_log, **mfcc_params)
+                 mfcc_params.setdefault('window', window)
+                 # Call MFCC function - prefer passing pre-calculated S_mel_log
+                 feature_result = mfcc(y=y if S_mel_log is None else None, # Pass y only if S not available
+                                       sr=sr,
+                                       S=S_mel_log, # Pass pre-calculated log-Mel spectrogram
+                                       **mfcc_params)
                  # Result shape (n_mfcc, time), store each coefficient as separate feature
                  n_mfcc_coeffs = feature_result.shape[0]
                  for i in range(n_mfcc_coeffs):
-                     results[f"mfcc_{i}"] = feature_result[i, :num_frames]
+                     mfcc_name = f"mfcc_{i}"
+                     results[mfcc_name] = feature_result[i, :num_frames] # Ensure length matches
+                     processed_features.add(mfcc_name)
+                 processed_features.add(feature_name) # Mark original request as processed
 
-            processed_features.add(feature_name)
-            # Add derived features (contrast bands, mfcc coeffs) to processed set
-            if feature_name == "spectral_contrast":
-                 processed_features.update([f"contrast_band_{i}" for i in range(n_bands_contrast)] + ["contrast_delta"])
-            if feature_name == "mfcc":
-                 processed_features.update([f"mfcc_{i}" for i in range(n_mfcc_coeffs)])
-
+            # --- Log success for the original feature name ---
+            logger.debug(f"Successfully processed feature: {feature_name}")
 
         except Exception as e:
             logger.error(f"Error extracting feature '{feature_name}': {e}", exc_info=True)
-            # Optionally continue to next feature or re-raise
+            # Option: Continue to next feature or re-raise? Re-raise for now.
             raise FeatureExtractionError(f"Failed to extract feature '{feature_name}': {e}")
 
     # --- Format Output ---
     if not results:
         logger.warning("No features were successfully extracted.")
-        return pd.DataFrame() if output_format == 'dataframe' else {}
+        return pd.DataFrame() if output_format == 'dataframe' else {'time': np.array([])}
 
-    # Ensure all result arrays have the correct length (num_frames)
+    # Ensure all result arrays have the correct length (num_frames) before creating output
     final_results = {}
     for name, arr in results.items():
         if arr.ndim == 1 and len(arr) == num_frames:
@@ -235,26 +299,31 @@ def extract_features(
              final_results[name] = arr[:num_frames]
         elif arr.ndim == 1 and len(arr) < num_frames:
              logger.warning(f"Feature '{name}' array length ({len(arr)}) < num_frames ({num_frames}). Padding with NaN.")
-             padded_arr = np.full(num_frames, np.nan)
+             padded_arr = np.full(num_frames, np.nan) # Use NaN for padding
              padded_arr[:len(arr)] = arr
              final_results[name] = padded_arr
         else:
+             # This case might occur if a feature function returns unexpected shape
              logger.error(f"Feature '{name}' has unexpected shape {arr.shape} or length. Skipping.")
 
+    # Add time array for dict output
+    if output_format == 'dict_of_arrays':
+        final_results['time'] = frame_times
+        logger.info(f"Feature extraction complete. Returning dictionary of {len(final_results)} arrays.")
+        return final_results
 
-    if output_format == 'dataframe':
+    # Create DataFrame for dataframe output
+    elif output_format == 'dataframe':
         try:
+            # Create DataFrame from the verified/adjusted results
             df = pd.DataFrame(final_results)
+            # Set index to time
             df.index = pd.to_timedelta(frame_times, unit='s')
             df.index.name = 'time'
             logger.info(f"Feature extraction complete. DataFrame shape: {df.shape}")
             return df
         except Exception as e:
+             # Catch errors during DataFrame creation (e.g., length mismatches if checks failed)
              raise FeatureExtractionError(f"Error creating output DataFrame: {e}")
-    elif output_format == 'dict_of_arrays':
-        logger.info(f"Feature extraction complete. Returning dictionary of arrays.")
-        # Add frame_times to the dictionary
-        final_results['time'] = frame_times
-        return final_results
     else:
-        raise ValueError(f"Unsupported output format: {output_format}")
+        raise ValueError(f"Unsupported output format: {output_format}. Choose 'dataframe' or 'dict_of_arrays'.")
