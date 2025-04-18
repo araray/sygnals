@@ -11,6 +11,9 @@ import logging
 from sygnals.version import __version__
 # Import the renamed ConfigGroup class
 from .base_cmd import ConfigGroup, verbose_option, quiet_option
+# Import SygnalsConfig for type checking
+from sygnals.config import SygnalsConfig
+
 # Import command groups/functions from other files as they are created/refactored
 # from .analyze_cmd import analyze
 # from .transform_cmd import transform
@@ -44,7 +47,8 @@ def main_cli(ctx, verbose: int, quiet: bool):
     # This function is executed when the main 'sygnals' command is run.
     # The actual logic for the group (like config loading) happens in ConfigGroup's invoke method.
     config = ctx.obj # Config should be loaded into ctx.obj by ConfigGroup.invoke
-    if isinstance(config, SygnalsConfig): # Check if config loading was successful
+    # Check if config object is the expected type (requires importing SygnalsConfig)
+    if isinstance(config, SygnalsConfig):
         logger.debug(f"Sygnals CLI group invoked with verbosity={verbose}, quiet={quiet}")
         logger.debug(f"Loaded config ID: {id(config)}") # Verify config object is passed
     else:
@@ -59,12 +63,17 @@ def main_cli(ctx, verbose: int, quiet: bool):
 def hello(ctx):
     """A simple example command."""
     config = ctx.obj # Access config from context
+    # Check config type again within the command
     if isinstance(config, SygnalsConfig):
         logger.info("Hello command executing.")
         logger.debug(f"Default sample rate from config: {config.defaults.default_sample_rate}")
         click.echo("Hello from Sygnals!")
     else:
+         # Log error and exit gracefully if config is missing/invalid in command context
+         logger.error("Configuration object not available in 'hello' command context.")
          click.echo("Error: Configuration not loaded correctly.", err=True)
+         # Optionally exit with error code, though Click might handle SystemExit from base class
+         # sys.exit(1)
 
 
 # Add other commands/groups as they are refactored or created
