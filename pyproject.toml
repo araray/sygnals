@@ -1,0 +1,93 @@
+# pyproject.toml
+
+[build-system]
+requires = ["setuptools>=78.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sygnals"
+version = "1.0.0"
+description = "A versatile command-line toolkit for signal and audio processing, tailored for data science workflows."
+readme = "README.md"
+authors = [
+  { name="Araray Velho", email="araray@gmail.com" },
+]
+license = { file="LICENSE" }
+requires-python = ">=3.11"
+classifiers = [
+    "Development Status :: 3 - Alpha", # Initial development phase
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Utilities",
+]
+keywords = ["signal processing", "audio processing", "dsp", "data science", "cli", "feature engineering"]
+
+# Core dependencies from requirements.txt + additions for Phase 1
+dependencies = [
+    "numpy>=2.2.4",
+    "scipy>=1.15.2",
+    "pandas>=2.2.3",
+    "pandasql", # Keep for now, might be refactored later
+    "librosa>=0.11.0",
+    "soundfile>=0.13.1",
+    "matplotlib>=3.10.1",
+    "click>=8.1.8",
+    "tabulate>=0.9.0",
+    "pywavelets>=1.8.0",
+    "rich>=14.0.0",
+    "pydantic>=2.11.3",
+    "toml>=0.10.2",
+    "packaging", # For plugin version comparisons (Phase 3 dependency, added early)
+    # "openpyxl", # Only needed if dealing with Excel files, removed for now
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.5",
+    "mypy>=1.15.0",
+    "flake8>=7.2.0",
+    "black>=25.1.0",
+    "isort>=6.0.1",
+    "ipykernel", # For notebooks if used in examples/
+]
+# Optional dependencies for specific features or plugins can be added later
+# e.g., parquet = ["pyarrow"], hdf5 = ["h5py"]
+
+[project.urls]
+Homepage = "https://github.com/araray/sygnals"
+Repository = "https://github.com/araray/sygnals"
+# Documentation = "..." # Add later
+
+[project.scripts]
+sygnals = "sygnals.cli.main:cli" # Updated entry point
+
+[tool.setuptools]
+# Include package data if needed later (e.g., default configs, templates)
+# package-data = {"sygnals" = ["py.typed", "config/defaults.toml"]}
+packages = ["sygnals"] # Explicitly list top-level package
+
+# --- Tool Configurations (Optional but Recommended) ---
+
+[tool.black]
+line-length = 88
+target-version = ['py311', 'py312', 'py313']
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true # Start permissive, tighten later
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra -q"
+testpaths = [
+    "tests",
+]

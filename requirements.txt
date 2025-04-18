@@ -10,3 +10,4 @@ tabulate
 pywavelets
 rich
 openpyxl
+pydantic
