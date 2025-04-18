@@ -10,10 +10,17 @@ Contains implementations of various audio effects like reverb, delay, pitch shif
 from .pitch_shift import pitch_shift
 from .time_stretch import time_stretch
 from .compression import simple_dynamic_range_compression
+from .reverb import apply_reverb # Added reverb
+from .delay import apply_delay   # Added delay
+from .equalizer import apply_graphic_eq, apply_parametric_eq # Added EQ placeholders
 
 __all__ = [
     "pitch_shift",
     "time_stretch",
     "simple_dynamic_range_compression",
+    "apply_reverb",
+    "apply_delay",
+    "apply_graphic_eq",
+    "apply_parametric_eq",
     # Add other effect functions/classes as they are implemented
 ]
