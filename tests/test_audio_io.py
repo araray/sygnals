@@ -4,6 +4,7 @@ import pytest
 import numpy as np
 import soundfile as sf
 from pathlib import Path # Use pathlib
+from numpy.testing import assert_allclose # Import assert_allclose
 
 # Import functions from the new structure
 from sygnals.core.audio.io import load_audio, save_audio
@@ -57,7 +58,7 @@ def test_save_audio(tmp_path: Path):
     loaded_data, loaded_sr = sf.read(str(out_file), dtype='float64') # Read as float64
     assert loaded_sr == sr
     # Allow for small differences due to PCM quantization if saved as PCM
-    assert np.allclose(data, loaded_data, atol=1e-4) # Increased tolerance for PCM_16
+    assert_allclose(data, loaded_data, atol=1e-4) # Increased tolerance for PCM_16
 
 def test_save_audio_float(tmp_path: Path):
     """Test saving audio with FLOAT subtype."""
@@ -68,6 +69,7 @@ def test_save_audio_float(tmp_path: Path):
     assert out_file.exists()
     loaded_data, loaded_sr = sf.read(str(out_file), dtype='float64')
     assert loaded_sr == sr
+    # Use the imported assert_allclose
     assert_allclose(data, loaded_data, atol=1e-7) # Should be very close for FLOAT
 
 # Test slice_audio removed as function is not in io or effects
@@ -108,10 +110,8 @@ def test_dynamic_range_compression():
     assert np.isclose(compressed[0], data[0])
 
     # Check that values above threshold are reduced
-    # For 0.6: unchanged (if threshold is exclusive, depends on impl - check > vs >=)
-    # Assuming threshold=0.5 means > 0.5 gets compressed
-    # Let's re-evaluate based on the implementation: abs(y) > threshold
-    assert abs(compressed[1]) > threshold # 0.6 > 0.5, should be compressed
+    # For 0.6: abs=0.6. over = 0.6 - 0.5 = 0.1. reduced_over = 0.1 / 4 = 0.025. new_amp = 0.5 + 0.025 = 0.525
+    assert np.isclose(abs(compressed[1]), 0.525)
     assert abs(compressed[1]) < abs(data[1]) # Magnitude should decrease
     # Expected for 0.9: over = 0.9 - 0.5 = 0.4. reduced_over = 0.4 / 4 = 0.1. new_amp = 0.5 + 0.1 = 0.6
     assert np.isclose(abs(compressed[2]), 0.6)
