@@ -9,6 +9,7 @@ import sys
 import traceback # Added for detailed exception printing in tests
 from pathlib import Path
 import toml # For creating dummy manifests
+import logging # Import logging for caplog test
 from typing import Optional, Dict, Any, List, Tuple, Callable # Import necessary types
 
 # Import components to test
@@ -38,9 +39,10 @@ def base_config(tmp_path: Path) -> SygnalsConfig:
     config = SygnalsConfig()
     # Override paths to use temp directory
     plugin_dir_path = tmp_path / "sygnals_test_plugins"
-    state_dir_path = tmp_path / "sygnals_test_state" # Separate state dir
+    # Use the *parent* of the plugin dir for the state file, as per loader logic
+    state_dir_path = plugin_dir_path.parent
     plugin_dir_path.mkdir(parents=True, exist_ok=True)
-    state_dir_path.mkdir(parents=True, exist_ok=True)
+    state_dir_path.mkdir(parents=True, exist_ok=True) # Ensure state dir exists
 
     config.paths = PathsConfig(
         plugin_dir=plugin_dir_path,
@@ -54,7 +56,10 @@ def base_config(tmp_path: Path) -> SygnalsConfig:
 
 @pytest.fixture
 def plugin_loader(base_config: SygnalsConfig, plugin_registry: PluginRegistry) -> PluginLoader:
-    """Provides a PluginLoader instance initialized with temp config and fresh registry."""
+    """
+    Provides a PluginLoader instance initialized with temp config and fresh registry.
+    NOTE: This fixture does NOT call discover_and_load automatically. Tests should call it.
+    """
     loader = PluginLoader(base_config, plugin_registry)
     # Also update the global instance that might be used by CLI commands if not patched
     sygnals_base_cmd.plugin_loader = loader
@@ -74,9 +79,12 @@ def teardown_sys_path():
             # Find original position if possible (approximate)
             try:
                  original_index = original_sys_path.index(p)
-                 new_sys_path.insert(original_index, p)
+                 # Avoid inserting duplicates if path somehow got added back
+                 if p not in new_sys_path:
+                     new_sys_path.insert(min(original_index, len(new_sys_path)), p)
             except ValueError:
-                 new_sys_path.append(p) # Append if original index not found
+                 if p not in new_sys_path:
+                     new_sys_path.append(p) # Append if original index not found
     sys.path = new_sys_path
 
 
@@ -150,8 +158,8 @@ class {class_name}(SygnalsPluginBase):
     @property
     def version(self) -> str: return "{version}"
 
-    def setup(self, config): logger.info(f"Plugin {name} setup called.")
-    def teardown(self): logger.info(f"Plugin {name} teardown called.")
+    def setup(self, config): logger.info(f"Plugin {{self.name}} setup called.") # Escaped braces
+    def teardown(self): logger.info(f"Plugin {{self.name}} teardown called.") # Escaped braces
 
 {hook_implementations}
 
@@ -195,6 +203,7 @@ def test_load_valid_local_plugin_registration(plugin_loader: PluginLoader, base_
     hook_code = 'registry.add_filter("my_test_filter", dummy_callable)'
     create_dummy_plugin(plugin_dir, state_dir, plugin_name, register_hooks={"register_filters": hook_code})
 
+    # Explicitly call discover_and_load *after* creating the plugin
     plugin_loader.discover_and_load()
 
     assert plugin_name in plugin_loader.loaded_plugins
@@ -214,9 +223,11 @@ def test_load_plugin_registering_multiple_types(plugin_loader: PluginLoader, bas
     }
     create_dummy_plugin(plugin_dir, state_dir, plugin_name, register_hooks=hooks)
 
+    # Explicitly call discover_and_load
     plugin_loader.discover_and_load()
 
     assert plugin_name in plugin_loader.loaded_plugins
+    # Assert based on what was *actually* registered by the hooks
     assert plugin_loader.registry.get_feature("multi_feature") is not None
     assert plugin_loader.registry.get_transform("multi_transform") is not None
     assert plugin_loader.registry.list_features() == ["multi_feature"]
@@ -234,6 +245,7 @@ def test_load_multiple_plugins_registration(plugin_loader: PluginLoader, base_co
     create_dummy_plugin(plugin_dir, state_dir, plugin1_name, register_hooks={"register_filters": 'registry.add_filter("filter_one", dummy_callable)'})
     create_dummy_plugin(plugin_dir, state_dir, plugin2_name, register_hooks={"register_features": 'registry.add_feature("feature_two", dummy_callable)'})
 
+    # Explicitly call discover_and_load
     plugin_loader.discover_and_load()
 
     assert plugin1_name in plugin_loader.loaded_plugins
@@ -257,7 +269,8 @@ def test_registration_overwriting(plugin_loader: PluginLoader, base_config: Sygn
     create_dummy_plugin(plugin_dir, state_dir, plugin2_name, register_hooks={"register_features": f'registry.add_feature("{feature_name}", lambda: 2)'})
 
     # Capture log messages
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.WARNING): # Import logging at top
+        # Explicitly call discover_and_load
         plugin_loader.discover_and_load()
 
     assert plugin1_name in plugin_loader.loaded_plugins
@@ -282,10 +295,12 @@ def test_skip_incompatible_plugin(plugin_loader: PluginLoader, base_config: Sygn
     # Require a future API version
     create_dummy_plugin(plugin_dir, state_dir, plugin_name, api_req=">=99.0.0")
 
+    # Explicitly call discover_and_load
     plugin_loader.discover_and_load()
 
     assert plugin_name not in plugin_loader.loaded_plugins
-    assert plugin_name in plugin_loader.plugin_manifests # Manifest stored
+    # Manifest should be stored even if incompatible
+    assert plugin_name in plugin_loader.plugin_manifests
     assert plugin_loader.plugin_sources[plugin_name] == 'local'
     assert not plugin_loader.registry.loaded_plugin_names
 
@@ -297,8 +312,11 @@ def test_skip_disabled_plugin(plugin_loader: PluginLoader, base_config: SygnalsC
     plugin_name = "test-disabled"
     create_dummy_plugin(plugin_dir, state_dir, plugin_name, is_enabled=False)
 
+    # Explicitly call discover_and_load *after* creating the plugin and setting state
     plugin_loader.discover_and_load()
 
+    # Now the assertion should pass because the loader reads the state file
+    # created by create_dummy_plugin before trying to load
     assert plugin_name not in plugin_loader.loaded_plugins
     assert plugin_name in plugin_loader.plugin_manifests # Found but not loaded
     assert plugin_loader.plugin_sources[plugin_name] == 'local'
@@ -355,7 +373,6 @@ entry_point = "non_existent_module.plugin:NonExistentPlugin"
     current_state[plugin_name] = True
     _save_plugin_state(state_dir, current_state)
 
-
     plugin_loader.discover_and_load()
     assert plugin_name not in plugin_loader.loaded_plugins
     # Manifest should be stored even if import fails later
@@ -386,11 +403,13 @@ class {class_name_wrong}: # Class doesn't inherit!
 # Keep the original class name definition too, just in case import logic needs it initially
 # but the manifest points to the wrong one.
 class {class_name_correct}:
-    pass
+    @property
+    def name(self): return "{plugin_name}" # Need properties for check later
+    @property
+    def version(self): return "0.1.0"
 
 """
     plugin_py_path.write_text(plugin_py_content_wrong_class)
-
 
     # Adjust the manifest entry point to point to the wrong class
     manifest_path = plugin_dir / plugin_name / "plugin.toml"
@@ -429,12 +448,13 @@ def test_plugin_list_cli(plugin_loader: PluginLoader, base_config: SygnalsConfig
     """Test the 'sygnals plugin list' command."""
     plugin_dir = base_config.paths.plugin_dir
     state_dir = base_config._test_state_dir
-    # Create one loaded, one disabled, one incompatible using the fixture's loader
+    # Create one loaded, one disabled, one incompatible
     create_dummy_plugin(plugin_dir, state_dir, "plugin-loaded", version="1.0", register_hooks={"register_filters": 'registry.add_filter("f1", dummy_callable)'})
     create_dummy_plugin(plugin_dir, state_dir, "plugin-disabled", version="1.1", is_enabled=False)
     create_dummy_plugin(plugin_dir, state_dir, "plugin-incomp", version="1.2", api_req=">=99.0")
 
-    # Ensure the fixture's loader has processed these plugins
+    # Explicitly call discover_and_load *after* creating plugins
+    # This ensures the loader sees the correct state for 'plugin-disabled'
     plugin_loader.discover_and_load()
 
     # Patch the loader instance used within the CLI context
@@ -452,8 +472,10 @@ def test_plugin_list_cli(plugin_loader: PluginLoader, base_config: SygnalsConfig
     assert result.exit_code == 0
     # Check for presence and status (allow for Rich formatting variations)
     assert "plugin-loaded" in result.output and "1.0" in result.output and "loaded" in result.output
+    # Now 'plugin-disabled' should correctly show as disabled
     assert "plugin-disabled" in result.output and "1.1" in result.output and "disabled" in result.output
-    assert "plugin-incomp" in result.output and "1.2" in result.output and "incompatible" in result.output # Check substring
+    # Check for incompatible status - might be truncated by Rich
+    assert "plugin-incomp" in result.output and "1.2" in result.output and "incompatible" in result.output # Check substring or full string
     assert "local" in result.output # Check source
 
 
@@ -464,12 +486,13 @@ def test_plugin_enable_disable_cli(plugin_loader: PluginLoader, base_config: Syg
     plugin_name = "plugin-toggle"
     create_dummy_plugin(plugin_dir, state_dir, plugin_name, is_enabled=True) # Start enabled
 
-    # Ensure the fixture's loader has processed this plugin's manifest
-    plugin_loader.discover_and_load()
-
-    # Patch the loader instance used within the CLI context
+    # Patch the loader instance used within the CLI context *before* running commands
+    # The commands themselves will use this patched loader to modify state
     mocker.patch('sygnals.cli.base_cmd.plugin_loader', plugin_loader)
     mocker.patch('sygnals.cli.base_cmd.load_configuration', return_value=base_config)
+
+    # We still need the loader to know about the plugin manifest *before* enable/disable is called
+    plugin_loader.discover_and_load() # Load manifests initially
 
     runner = CliRunner()
 
@@ -479,7 +502,7 @@ def test_plugin_enable_disable_cli(plugin_loader: PluginLoader, base_config: Syg
     if result_disable.exception: print("Exception:\n", result_disable.exception)
     assert result_disable.exit_code == 0
     assert "disabled" in result_disable.output
-    # Check state file
+    # Check state file was updated
     state1 = _load_plugin_state(state_dir)
     assert state1.get(plugin_name) is False
 
@@ -489,7 +512,7 @@ def test_plugin_enable_disable_cli(plugin_loader: PluginLoader, base_config: Syg
     if result_enable.exception: print("Exception:\n", result_enable.exception)
     assert result_enable.exit_code == 0
     assert "enabled" in result_enable.output
-    # Check state file
+    # Check state file was updated
     state2 = _load_plugin_state(state_dir)
     assert state2.get(plugin_name) is True
 
