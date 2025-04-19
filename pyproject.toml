@@ -27,7 +27,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: Utilities",
 ]
-keywords = ["signal processing", "audio processing", "dsp", "data science", "cli", "feature engineering"]
+keywords = ["signal processing", "audio processing", "dsp", "data science", "cli", "feature engineering", "machine learning"] # Added ML keyword
 
 # Core dependencies from requirements.txt + additions
 dependencies = [
@@ -44,8 +44,9 @@ dependencies = [
     "rich>=14.0.0",
     "pydantic>=2.11.3",
     "toml>=0.10.2",
-    "packaging", # For plugin version comparisons (Phase 3 dependency, added early)
+    "packaging", # For plugin version comparisons
     "resampy>=0.4.3", # Added dependency for librosa resampling
+    "scikit-learn>=1.5.1", # Added for ML utilities (scaling) - Phase 4
     # "openpyxl", # Only needed if dealing with Excel files, removed for now
 ]
 
@@ -86,6 +87,10 @@ python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true # Start permissive, tighten later
+# Add ignores for optional imports if mypy complains without sklearn
+# [[tool.mypy.overrides]]
+# module = "sygnals.core.ml_utils.scaling"
+# ignore_errors = true # Or more specific ignore codes
 
 [tool.pytest.ini_options]
 minversion = "8.0"
