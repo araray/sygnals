@@ -2,26 +2,24 @@
 
 """
 Tests for audio effect functions in sygnals.core.audio.effects.
+Tests for augmentation effects (noise, pitch, time) are in test_augment.py.
 """
 
 import pytest
 import numpy as np
 from numpy.testing import assert_allclose, assert_equal, assert_array_less
 
-# Import effect functions to test
+# Import effect functions to test (excluding those moved to augment)
 from sygnals.core.audio.effects import (
     simple_dynamic_range_compression,
-    pitch_shift,
-    time_stretch,
     apply_reverb,
     apply_delay,
     apply_graphic_eq,
     apply_parametric_eq,
-    apply_chorus,
-    apply_flanger,
-    apply_tremolo,
+    apply_chorus,    # Placeholder
+    apply_flanger,   # Placeholder
+    apply_tremolo,   # Placeholder
     adjust_gain,
-    add_noise,
 )
 
 # --- Test Fixtures ---
@@ -66,28 +64,6 @@ def test_simple_dynamic_range_compression(sample_audio_short):
     below_thresh_indices = np.where(np.abs(signal) <= threshold)[0]
     if below_thresh_indices.size > 0:
         assert_allclose(signal[below_thresh_indices], compressed_signal[below_thresh_indices], atol=1e-7)
-
-def test_pitch_shift(sample_audio_short):
-    """Test the pitch shifting effect."""
-    signal, sr = sample_audio_short
-    n_steps = -3.0 # Shift down by 3 semitones
-    shifted_signal = pitch_shift(signal, sr, n_steps=n_steps)
-
-    assert shifted_signal.shape == signal.shape # Pitch shift shouldn't change length significantly
-    assert shifted_signal.dtype == np.float64
-    # More detailed tests could involve analyzing the frequency content before/after shift
-
-def test_time_stretch(sample_audio_short):
-    """Test the time stretching effect."""
-    signal, sr = sample_audio_short
-    rate = 0.75 # Slow down
-    stretched_signal = time_stretch(signal, rate=rate)
-
-    assert stretched_signal.dtype == np.float64
-    # Check if the length changed approximately according to the rate
-    expected_len = len(signal) / rate
-    # Allow some tolerance due to framing/algorithm details
-    assert abs(len(stretched_signal) - expected_len) < 0.1 * len(signal)
 
 # --- Tests for Reverb and Delay ---
 
@@ -214,39 +190,6 @@ def test_adjust_gain(sample_audio_short):
     zero_gain_signal = adjust_gain(signal, gain_db=0.0)
     assert_allclose(signal, zero_gain_signal, atol=1e-9)
 
-
-def test_add_noise(sample_audio_short):
-    """Test the add_noise utility."""
-    signal, sr = sample_audio_short
-    signal_power = np.mean(signal**2)
-
-    # Test adding noise with specific SNR
-    snr_db = 10.0
-    noisy_signal_g = add_noise(signal, snr_db=snr_db, noise_type='gaussian', seed=42)
-    assert noisy_signal_g.dtype == np.float64
-    assert noisy_signal_g.shape == signal.shape
-    # Verify SNR approximately matches target
-    noise_added_g = noisy_signal_g - signal
-    noise_power_g = np.mean(noise_added_g**2)
-    # Handle potential zero signal power case although fixture avoids it
-    actual_snr_db_g = 10 * np.log10(signal_power / noise_power_g) if signal_power > 1e-15 and noise_power_g > 1e-15 else -np.inf
-    assert np.isclose(actual_snr_db_g, snr_db, atol=1.0) # Allow 1 dB tolerance
-
-    # Test reproducibility with seed
-    noisy_signal_g_seed1 = add_noise(signal, snr_db=snr_db, noise_type='gaussian', seed=42)
-    noisy_signal_g_seed2 = add_noise(signal, snr_db=snr_db, noise_type='gaussian', seed=123)
-    assert_allclose(noisy_signal_g, noisy_signal_g_seed1)
-    assert not np.allclose(noisy_signal_g, noisy_signal_g_seed2)
-
-    # Test placeholder noise types (should currently add white noise and warn)
-    with pytest.warns(UserWarning, match="Pink noise generation is currently a placeholder"):
-         noisy_signal_p = add_noise(signal, snr_db=snr_db, noise_type='pink')
-         assert noisy_signal_p.shape == signal.shape # Check basic execution
-
-    with pytest.warns(UserWarning, match="Brown noise generation is currently a placeholder"):
-         noisy_signal_b = add_noise(signal, snr_db=snr_db, noise_type='brown')
-         assert noisy_signal_b.shape == signal.shape # Check basic execution
-
-    # Test invalid noise type
-    with pytest.raises(ValueError, match="Invalid noise_type"):
-        add_noise(signal, snr_db=snr_db, noise_type='invalid')
+# Removed test_add_noise as it's now in test_augment.py
+# Removed test_pitch_shift as it's now in test_augment.py
+# Removed test_time_stretch as it's now in test_augment.py
