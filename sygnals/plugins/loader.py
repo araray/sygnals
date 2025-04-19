@@ -10,7 +10,7 @@ import logging
 import sys
 import traceback
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple, Set
+from typing import Dict, Any, List, Optional, Tuple, Set, Type
 
 import toml
 from packaging.specifiers import SpecifierSet, InvalidSpecifier

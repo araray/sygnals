@@ -10,6 +10,7 @@ import click
 import logging
 import sys
 import atexit # For calling teardown hooks
+from typing import Dict, Any, List, Optional, Tuple, Set, Type
 
 from sygnals.version import __version__
 from .base_cmd import ConfigGroup, verbose_option, quiet_option # ConfigGroup handles config/logging

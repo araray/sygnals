@@ -7,7 +7,7 @@ and the registry for extensions.
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Callable, Type, Optional, List, Set
+from typing import Dict, Any, Callable, Type, Optional, List, Set, Union
 
 # Import Click types for CLI command registration if needed later
 try:
