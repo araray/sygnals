@@ -28,16 +28,17 @@ def sample_audio_for_mfcc():
 def precomputed_melspec(sample_audio_for_mfcc):
     """Generate a pre-computed log-power Mel spectrogram."""
     signal, sr = sample_audio_for_mfcc
-    n_fft = 2048
-    hop_length = 512
-    n_mels = 128
+    n_fft = 2048 # Match default n_fft if not overridden
+    hop_length = 512 # Match default hop_length if not overridden
+    n_mels = 128 # Match default n_mels if not overridden
     # Calculate power spectrogram
     S_power = np.abs(librosa.stft(signal, n_fft=n_fft, hop_length=hop_length))**2
     # Calculate Mel spectrogram
     S_mel = librosa.feature.melspectrogram(S=S_power, sr=sr, n_fft=n_fft, hop_length=hop_length, n_mels=n_mels)
     # Convert to log scale (dB)
     S_mel_log = librosa.power_to_db(S_mel, ref=np.max)
-    return S_mel_log, sr, hop_length
+    # Return necessary info for comparison
+    return S_mel_log, sr, n_fft, hop_length
 
 # --- Test Cases ---
 
@@ -51,19 +52,19 @@ def test_mfcc_from_audio(sample_audio_for_mfcc):
     mfccs = mfcc(y=signal, sr=sr, n_mfcc=n_mfcc, n_fft=n_fft, hop_length=hop_length)
 
     # Check output shape: (n_mfcc, num_frames)
-    expected_num_frames = int(np.floor(len(signal) / hop_length)) + 1
+    # Calculate expected frames using librosa's centered framing logic
+    expected_num_frames = 1 + int(np.floor(len(signal) / hop_length))
     assert mfccs.shape[0] == n_mfcc
     assert mfccs.shape[1] == expected_num_frames
     assert mfccs.dtype == np.float64
 
 def test_mfcc_from_spectrogram(precomputed_melspec):
     """Test calculating MFCCs from a pre-computed log-power Mel spectrogram."""
-    S_mel_log, sr, hop_length = precomputed_melspec
+    S_mel_log, sr, n_fft, hop_length = precomputed_melspec
     n_mfcc = 20 # Use a different number of MFCCs
 
-    # Note: When passing S, y is ignored. sr might still be needed if hop_length isn't implicitly known or passed.
-    # Our mfcc function wrapper passes sr, so it should be fine.
-    mfccs = mfcc(S=S_mel_log, sr=sr, n_mfcc=n_mfcc, hop_length=hop_length) # Pass hop_length if needed by internal DCT
+    # Pass sr as librosa might need it internally, even with S
+    mfccs = mfcc(S=S_mel_log, sr=sr, n_mfcc=n_mfcc, n_fft=n_fft, hop_length=hop_length)
 
     # Check output shape
     expected_num_frames = S_mel_log.shape[1]
@@ -71,17 +72,33 @@ def test_mfcc_from_spectrogram(precomputed_melspec):
     assert mfccs.shape[1] == expected_num_frames
     assert mfccs.dtype == np.float64
 
+def test_mfcc_consistency_y_vs_s(sample_audio_for_mfcc, precomputed_melspec):
+    """Test if MFCCs from y and S are consistent."""
+    signal, sr = sample_audio_for_mfcc
+    S_mel_log, sr_s, n_fft, hop_length = precomputed_melspec
+    n_mfcc = 13
+
+    # Calculate from y
+    mfccs_from_y = mfcc(y=signal, sr=sr, n_mfcc=n_mfcc, n_fft=n_fft, hop_length=hop_length)
+    # Calculate from S
+    mfccs_from_S = mfcc(S=S_mel_log, sr=sr, n_mfcc=n_mfcc, n_fft=n_fft, hop_length=hop_length)
+
+    assert mfccs_from_y.shape == mfccs_from_S.shape
+    # Use assert_allclose for float comparison
+    assert_allclose(mfccs_from_y, mfccs_from_S, atol=1e-5) # Allow small tolerance
+
 def test_mfcc_parameters(sample_audio_for_mfcc):
     """Test the effect of different MFCC parameters (n_mfcc, lifter)."""
     signal, sr = sample_audio_for_mfcc
     hop_length = 512
+    n_fft = 2048
 
     # Calculate with default n_mfcc=13, no liftering
-    mfccs_13 = mfcc(y=signal, sr=sr, n_mfcc=13, hop_length=hop_length, lifter=0)
+    mfccs_13 = mfcc(y=signal, sr=sr, n_mfcc=13, n_fft=n_fft, hop_length=hop_length, lifter=0)
     # Calculate with n_mfcc=20, no liftering
-    mfccs_20 = mfcc(y=signal, sr=sr, n_mfcc=20, hop_length=hop_length, lifter=0)
+    mfccs_20 = mfcc(y=signal, sr=sr, n_mfcc=20, n_fft=n_fft, hop_length=hop_length, lifter=0)
     # Calculate with n_mfcc=13, with liftering
-    mfccs_13_lifted = mfcc(y=signal, sr=sr, n_mfcc=13, hop_length=hop_length, lifter=22) # Common lifter value
+    mfccs_13_lifted = mfcc(y=signal, sr=sr, n_mfcc=13, n_fft=n_fft, hop_length=hop_length, lifter=22) # Common lifter value
 
     assert mfccs_13.shape[0] == 13
     assert mfccs_20.shape[0] == 20
@@ -91,13 +108,19 @@ def test_mfcc_parameters(sample_audio_for_mfcc):
     # Check that liftering changes the values
     assert not np.allclose(mfccs_13, mfccs_13_lifted)
 
-    # Check that the first 13 coeffs of mfccs_20 are similar (but not identical due to DCT normalization)
-    # to mfccs_13. This is not strictly guaranteed but often holds approximately.
-    # assert_allclose(mfccs_13, mfccs_20[:13, :], atol=1.0) # Allow some tolerance
+    # Check that the first 13 coeffs of mfccs_20 are identical to mfccs_13
+    # (assuming same underlying Mel spectrogram and DCT type/norm)
+    assert_allclose(mfccs_13, mfccs_20[:13, :], atol=1e-6)
 
 def test_mfcc_missing_input():
     """Test calling mfcc without providing 'y' or 'S'."""
     with pytest.raises(ValueError, match="Either audio time series 'y' or Mel spectrogram 'S' must be provided."):
         mfcc(sr=22050, n_mfcc=13)
+
+def test_mfcc_missing_sr_with_y(sample_audio_for_mfcc):
+    """Test calling mfcc with 'y' but missing 'sr'."""
+    signal, _ = sample_audio_for_mfcc
+    with pytest.raises(ValueError, match="Sampling rate 'sr' must be provided when calculating MFCCs from time series 'y'."):
+        mfcc(y=signal, n_mfcc=13)
 
 # --- Add tests for other cepstral features (LPC, etc.) as implemented ---
