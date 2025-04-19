@@ -2,6 +2,7 @@
 
 """
 Handles the discovery, loading, and registration of Sygnals plugins.
+Includes discovery via entry points and local directories.
 """
 
 import importlib
@@ -27,8 +28,35 @@ logger = logging.getLogger(__name__)
 # --- Constants ---
 PLUGIN_MANIFEST_FILENAME = "plugin.toml"
 PLUGIN_STATE_FILENAME = "plugins.yaml" # Simple state file (could use JSON/TOML)
+ENTRY_POINT_GROUP = "sygnals.plugins" # Entry point group name
 
 # --- Helper Functions ---
+
+def _find_manifest_for_module(module) -> Optional[Path]:
+    """
+    Tries to find the plugin.toml manifest file relative to a loaded module.
+    Assumes standard packaging structure (e.g., manifest in parent dir of package).
+    """
+    if not hasattr(module, '__file__') or module.__file__ is None:
+        logger.warning(f"Cannot determine file path for module {module.__name__} to find manifest.")
+        return None
+
+    module_path = Path(module.__file__).parent
+    # Search upwards from the module's directory for plugin.toml
+    current_dir = module_path
+    # Limit search depth to avoid searching the entire filesystem
+    for _ in range(5): # Search up to 5 levels up
+        manifest_path = current_dir / PLUGIN_MANIFEST_FILENAME
+        if manifest_path.is_file():
+            logger.debug(f"Found manifest for module {module.__name__} at {manifest_path}")
+            return manifest_path
+        if current_dir.parent == current_dir: # Reached root
+            break
+        current_dir = current_dir.parent
+
+    logger.warning(f"Could not find {PLUGIN_MANIFEST_FILENAME} near module {module.__name__} path {module_path}.")
+    return None
+
 
 def _parse_manifest(manifest_path: Path) -> Optional[Dict[str, Any]]:
     """Parses a plugin.toml manifest file."""
@@ -72,24 +100,26 @@ def _check_compatibility(plugin_name: str, plugin_version: str, api_specifier: s
          logger.error(f"Error checking compatibility for plugin '{plugin_name}': {e}")
          return False
 
-def _import_plugin_entry_point(entry_point_str: str, manifest_path: Path) -> Optional[Type[SygnalsPluginBase]]:
-    """Imports the plugin's entry point class."""
+def _import_plugin_entry_point(entry_point_str: str, manifest_path: Optional[Path] = None) -> Optional[Type[SygnalsPluginBase]]:
+    """
+    Imports the plugin's entry point class.
+    Handles temporary sys.path modification for local plugins if manifest_path is provided.
+    """
     module_str, class_name = entry_point_str.split(':')
+    plugin_root_dir = manifest_path.parent if manifest_path else None
+    needs_path_update = False
+    original_sys_path = list(sys.path) # Store original path
+
     try:
-        # If the plugin is local, we might need to add its directory to sys.path temporarily
-        # to allow relative imports within the plugin itself.
-        plugin_root_dir = manifest_path.parent
-        needs_path_update = str(plugin_root_dir) not in sys.path
-        if needs_path_update:
+        # If it's a local plugin, temporarily add its root to sys.path
+        # to handle potential relative imports within the plugin code.
+        if plugin_root_dir and str(plugin_root_dir) not in sys.path:
             sys.path.insert(0, str(plugin_root_dir))
+            needs_path_update = True
             logger.debug(f"Temporarily added {plugin_root_dir} to sys.path for plugin import.")
 
         module = importlib.import_module(module_str)
         plugin_class = getattr(module, class_name, None)
-
-        if needs_path_update:
-            sys.path.pop(0) # Remove path after import
-            logger.debug(f"Removed {plugin_root_dir} from sys.path.")
 
         if plugin_class is None:
             logger.error(f"Entry point class '{class_name}' not found in module '{module_str}' "
@@ -103,10 +133,24 @@ def _import_plugin_entry_point(entry_point_str: str, manifest_path: Path) -> Opt
     except ImportError as e:
         logger.error(f"Failed to import plugin module '{module_str}': {e} (manifest: {manifest_path}). "
                      "Check PYTHONPATH and plugin structure.")
+        # Print traceback for import errors to aid debugging
+        traceback.print_exc()
         return None
     except Exception as e:
         logger.error(f"Error importing plugin entry point '{entry_point_str}': {e}", exc_info=True)
         return None
+    finally:
+        # Restore original sys.path if it was modified
+        if needs_path_update:
+             # Check if the path is still there before removing
+             if str(plugin_root_dir) in sys.path and sys.path[0] == str(plugin_root_dir):
+                  sys.path.pop(0)
+                  logger.debug(f"Removed {plugin_root_dir} from sys.path.")
+             else:
+                  # Restore from original if something went wrong
+                  logger.warning(f"sys.path was modified unexpectedly during import of {module_str}. Restoring original path.")
+                  sys.path = original_sys_path
+
 
 # --- Plugin State Management (Basic) ---
 
@@ -148,21 +192,23 @@ class PluginLoader:
         self.config = config
         self.registry = registry
         self.loaded_plugins: Dict[str, SygnalsPluginBase] = {}
-        self.plugin_manifests: Dict[str, Dict[str, Any]] = {} # Store manifest data by plugin name
+        # Store manifest data and path together
+        self.plugin_manifests: Dict[str, Tuple[Dict[str, Any], Path]] = {} # name -> (manifest_data, manifest_path)
         self.plugin_sources: Dict[str, str] = {} # Store source ('entry_point' or 'local')
         self.plugin_enabled_state: Dict[str, bool] = {} # Store enabled/disabled status
 
-    def _load_and_register(self, plugin_name: str, manifest_path: Path):
+    def _load_and_register(self, plugin_name: str):
         """
         Loads, validates, and registers a single plugin *after* its manifest
-        has been parsed and stored.
+        has been parsed and stored. Uses data stored in self.plugin_manifests.
         """
-        # Manifest data should already be in self.plugin_manifests
-        manifest_data = self.plugin_manifests.get(plugin_name)
-        if not manifest_data:
-             logger.error(f"Internal error: Manifest data not found for '{plugin_name}' during load attempt.")
+        # Manifest data and path should already be in self.plugin_manifests
+        manifest_tuple = self.plugin_manifests.get(plugin_name)
+        if not manifest_tuple:
+             logger.error(f"Internal error: Manifest data/path not found for '{plugin_name}' during load attempt.")
              return # Should not happen if called correctly
 
+        manifest_data, manifest_path = manifest_tuple
         plugin_version = manifest_data['version']
         api_spec = manifest_data['sygnals_api']
         entry_point_str = manifest_data['entry_point']
@@ -177,6 +223,7 @@ class PluginLoader:
              return # Skip disabled plugin
 
         # 3. Import entry point
+        # Pass manifest_path to helper for local plugins sys.path handling
         plugin_class = _import_plugin_entry_point(entry_point_str, manifest_path)
         if plugin_class is None:
             return # Skip if import failed
@@ -189,6 +236,8 @@ class PluginLoader:
                  logger.warning(f"Manifest/Instance mismatch for plugin '{plugin_name}'. "
                                 f"Manifest: ({plugin_name}, {plugin_version}), "
                                 f"Instance: ({plugin_instance.name}, {plugin_instance.version}). Using instance values.")
+                 # Update internal name based on instance if needed? For now, just warn.
+                 # plugin_name = plugin_instance.name # Be careful with this
         except Exception as e:
             logger.error(f"Failed to instantiate plugin '{plugin_name}' from {entry_point_str}: {e}", exc_info=True)
             return
@@ -229,19 +278,65 @@ class PluginLoader:
     def discover_and_load(self):
         """Discover plugins from entry points and local directory, then load and register them."""
         logger.info("Starting plugin discovery...")
-        discovered_manifest_paths: Dict[str, Tuple[Path, str]] = {} # name -> (path, source)
+        # Clear previous discovery results before starting new discovery
+        self.plugin_manifests.clear()
+        self.plugin_sources.clear()
+        # Keep loaded_plugins until teardown, but registry should be fresh if loader is re-run
 
         # --- Load Enabled State ---
-        # State file should be relative to config dir, not necessarily plugin dir parent
-        # Using config.paths.plugin_dir.parent assumes state file is alongside plugin dir folder
-        # A better location might be ~/.config/sygnals/ or similar. Using plugin_dir.parent for now.
+        # State file location - use config directory parent as a convention
         state_file_dir = self.config.paths.plugin_dir.parent
         self.plugin_enabled_state = _load_plugin_state(state_file_dir)
         logger.debug(f"Loaded plugin enabled/disabled state from {state_file_dir}: {self.plugin_enabled_state}")
 
         # --- Discover Entry Points ---
-        # (Skipping entry point discovery for now as it's complex to map back to manifests reliably)
-        logger.debug("Entry point discovery currently skipped.")
+        logger.debug(f"Scanning for entry points in group '{ENTRY_POINT_GROUP}'...")
+        try:
+            # Use importlib.metadata to find entry points
+            entry_points = importlib.metadata.entry_points(group=ENTRY_POINT_GROUP)
+            for ep in entry_points:
+                logger.debug(f"Found entry point: name='{ep.name}', value='{ep.value}'")
+                try:
+                    # Load the module associated with the entry point to find its manifest
+                    plugin_module = ep.load() # This actually loads the entry point function/class
+                    # We need the *module* containing the entry point
+                    # This is tricky, ep.load() gives the object itself.
+                    # We might need to parse ep.value to get the module path.
+                    if ':' in ep.value:
+                        module_path_str = ep.value.split(':', 1)[0]
+                        try:
+                            containing_module = importlib.import_module(module_path_str)
+                            manifest_path = _find_manifest_for_module(containing_module)
+                            if manifest_path:
+                                manifest_data = _parse_manifest(manifest_path)
+                                if manifest_data:
+                                    plugin_name = manifest_data['name']
+                                    # Check if name matches entry point name (convention)
+                                    if plugin_name != ep.name:
+                                        logger.warning(f"Entry point name '{ep.name}' differs from manifest name '{plugin_name}' in {manifest_path}. Using manifest name.")
+
+                                    if plugin_name in self.plugin_manifests:
+                                        logger.warning(f"Duplicate plugin name '{plugin_name}' found (entry point vs local/other entry point). Prioritizing first discovery.")
+                                    else:
+                                        self.plugin_manifests[plugin_name] = (manifest_data, manifest_path)
+                                        self.plugin_sources[plugin_name] = 'entry_point'
+                                else:
+                                     logger.warning(f"Could not parse manifest found at {manifest_path} for entry point '{ep.name}'.")
+                            else:
+                                 logger.warning(f"Could not find manifest file near module for entry point '{ep.name}'. Skipping.")
+                        except ImportError:
+                             logger.error(f"Could not import module '{module_path_str}' for entry point '{ep.name}'. Skipping.")
+                        except Exception as e:
+                             logger.error(f"Error processing entry point '{ep.name}': {e}", exc_info=True)
+
+                    else:
+                        logger.warning(f"Entry point value '{ep.value}' for '{ep.name}' is not in expected 'module:object' format. Cannot find manifest.")
+
+                except Exception as e:
+                    logger.error(f"Failed to load or process entry point '{ep.name}': {e}", exc_info=True)
+
+        except Exception as e:
+            logger.error(f"Error occurred during entry point discovery: {e}", exc_info=True)
 
         # --- Discover Local Plugins ---
         local_plugin_dir = self.config.paths.plugin_dir
@@ -255,13 +350,11 @@ class PluginLoader:
                         manifest_data = _parse_manifest(manifest_path)
                         if manifest_data:
                             plugin_name = manifest_data['name']
-                            if plugin_name in self.plugin_manifests: # Check if already discovered
-                                logger.warning(f"Duplicate plugin name '{plugin_name}' found. Prioritizing first discovery.")
+                            if plugin_name in self.plugin_manifests: # Check if already discovered (e.g., via entry point)
+                                logger.warning(f"Duplicate plugin name '{plugin_name}' found (local vs entry point/other local). Prioritizing first discovery.")
                             else:
-                                # FIX: Store manifest and source immediately after parsing
-                                self.plugin_manifests[plugin_name] = manifest_data
+                                self.plugin_manifests[plugin_name] = (manifest_data, manifest_path)
                                 self.plugin_sources[plugin_name] = 'local'
-                                discovered_manifest_paths[plugin_name] = (manifest_path, 'local') # Keep track for loading loop
         else:
             logger.debug(f"Local plugin directory not found or not a directory: {local_plugin_dir}")
 
@@ -269,28 +362,26 @@ class PluginLoader:
         # --- Load and Register Discovered Plugins ---
         logger.info(f"Found {len(self.plugin_manifests)} potential plugin manifests. Attempting to load...")
         # Iterate through the names found during discovery
-        for name in list(self.plugin_manifests.keys()): # Use list to avoid dict size change issues
-             if name in discovered_manifest_paths: # Check if it was found in this run's discovery
-                 path, source = discovered_manifest_paths[name]
-                 # Attempt to load and register this specific plugin
-                 self._load_and_register(name, path)
-             else:
-                 # This case might occur if manifest was stored from a previous run but not found now
-                 logger.debug(f"Plugin '{name}' manifest exists but was not discovered in this run. Skipping load attempt.")
+        # Use list() to create a copy, allowing modification during iteration if needed (though not done here)
+        for name in list(self.plugin_manifests.keys()):
+             # Attempt to load and register this specific plugin using stored manifest info
+             self._load_and_register(name)
 
 
         logger.info(f"Plugin loading complete. {len(self.loaded_plugins)} plugins loaded successfully.")
 
     def get_plugin_info(self) -> List[Dict[str, Any]]:
-        """Return metadata about all discovered plugins (loaded or disabled)."""
+        """Return metadata about all discovered plugins (loaded or disabled/failed)."""
         info_list = []
         all_discovered_names = set(self.plugin_manifests.keys())
 
         for name in sorted(list(all_discovered_names)):
-            manifest = self.plugin_manifests.get(name, {})
+            manifest_tuple = self.plugin_manifests.get(name)
+            manifest = manifest_tuple[0] if manifest_tuple else {}
             source = self.plugin_sources.get(name, 'unknown')
             is_loaded = name in self.loaded_plugins
             is_enabled = self.plugin_enabled_state.get(name, True) # Default enabled
+
             # Determine status more accurately
             status = "unknown"
             if not is_enabled:
@@ -300,12 +391,12 @@ class PluginLoader:
             elif manifest: # Manifest exists but not loaded/disabled
                  # Check compatibility again to determine reason
                  if _check_compatibility(name, manifest.get('version','?'), manifest.get('sygnals_api','?'), core_version):
-                     status = "error/load_failed" # Compatible but failed load/import/setup
+                     # Compatible but failed somewhere after compatibility check
+                     status = "error/load_failed"
                  else:
                      status = "error/incompatible"
             else:
                  status = "error/no_manifest" # Should not happen if name is from plugin_manifests keys
-
 
             info_list.append({
                 "name": name,
@@ -318,7 +409,7 @@ class PluginLoader:
             })
         return info_list
 
-    def enable_plugin(self, name: str):
+    def enable_plugin(self, name: str) -> bool:
         """Mark a plugin as enabled."""
         # Check manifests first, as plugin might be discovered but not loaded
         if name not in self.plugin_manifests:
@@ -331,7 +422,7 @@ class PluginLoader:
         _save_plugin_state(state_file_dir, self.plugin_enabled_state)
         return True
 
-    def disable_plugin(self, name: str):
+    def disable_plugin(self, name: str) -> bool:
         """Mark a plugin as disabled."""
         # Check manifests first
         if name not in self.plugin_manifests:
@@ -347,11 +438,12 @@ class PluginLoader:
     def call_teardown_hooks(self):
         """Call the teardown method for all loaded plugins."""
         logger.debug("Calling teardown hooks for loaded plugins...")
-        for name, instance in self.loaded_plugins.items():
-            try:
-                instance.teardown()
-            except Exception as e:
-                logger.error(f"Error during teardown for plugin '{name}': {e}", exc_info=True)
-
-# --- Global instance (optional, depends on application structure) ---
-# global_plugin_registry = PluginRegistry()
+        # Iterate safely over a copy of the keys in case teardown modifies the dict
+        loaded_names = list(self.loaded_plugins.keys())
+        for name in loaded_names:
+            instance = self.loaded_plugins.get(name)
+            if instance:
+                try:
+                    instance.teardown()
+                except Exception as e:
+                    logger.error(f"Error during teardown for plugin '{name}': {e}", exc_info=True)
