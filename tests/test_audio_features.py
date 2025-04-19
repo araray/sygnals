@@ -31,6 +31,7 @@ def sine_wave_audio():
     freq = 440.0 # A4 note
     t = np.linspace(0, duration, int(sr * duration), endpoint=False)
     signal = (0.7 * np.sin(2 * np.pi * freq * t)).astype(np.float64)
+    # Return all three values
     return signal, sr, freq
 
 @pytest.fixture
@@ -53,6 +54,7 @@ def noise_audio():
 
 def test_zero_crossing_rate(sine_wave_audio, silent_audio, noise_audio):
     """Test the zero_crossing_rate feature."""
+    # Unpack fixture correctly
     signal_sine, sr, freq = sine_wave_audio
     signal_silent, _ = silent_audio
     signal_noise, _ = noise_audio
@@ -81,6 +83,7 @@ def test_zero_crossing_rate(sine_wave_audio, silent_audio, noise_audio):
 
 def test_rms_energy(sine_wave_audio, silent_audio):
     """Test the rms_energy feature."""
+    # Unpack fixture correctly
     signal_sine, sr, freq = sine_wave_audio
     signal_silent, _ = silent_audio
 
@@ -93,7 +96,8 @@ def test_rms_energy(sine_wave_audio, silent_audio):
     assert rms_sine.dtype == np.float64
     assert np.all(rms_sine >= 0)
     # Expected RMS for A*sin(wt) is A/sqrt(2)
-    expected_rms_sine = 0.7 / np.sqrt(2)
+    amplitude = 0.7 # From fixture
+    expected_rms_sine = amplitude / np.sqrt(2)
     assert_allclose(np.mean(rms_sine), expected_rms_sine, atol=0.05) # Check average RMS
 
     # RMS for silence (should be zero)
@@ -103,6 +107,7 @@ def test_rms_energy(sine_wave_audio, silent_audio):
 
 def test_fundamental_frequency(sine_wave_audio, silent_audio):
     """Test the fundamental_frequency (pitch) estimation."""
+    # Unpack fixture correctly
     signal_sine, sr, freq = sine_wave_audio
     signal_silent, _ = silent_audio
 
@@ -129,8 +134,10 @@ def test_fundamental_frequency(sine_wave_audio, silent_audio):
 
 def test_get_basic_audio_metrics(sine_wave_audio, silent_audio):
     """Test the get_basic_audio_metrics function."""
+    # Unpack fixture correctly
     signal_sine, sr, freq = sine_wave_audio
     signal_silent, _ = silent_audio
+    amplitude = 0.7 # From fixture
 
     metrics_sine = get_basic_audio_metrics(signal_sine, sr)
     assert isinstance(metrics_sine, dict)
@@ -138,8 +145,8 @@ def test_get_basic_audio_metrics(sine_wave_audio, silent_audio):
     assert "rms_global" in metrics_sine
     assert "peak_amplitude" in metrics_sine
     assert np.isclose(metrics_sine["duration_seconds"], 1.0)
-    assert np.isclose(metrics_sine["rms_global"], 0.7 / np.sqrt(2), atol=1e-3)
-    assert np.isclose(metrics_sine["peak_amplitude"], 0.7, atol=1e-3)
+    assert np.isclose(metrics_sine["rms_global"], amplitude / np.sqrt(2), atol=1e-3)
+    assert np.isclose(metrics_sine["peak_amplitude"], amplitude, atol=1e-3)
 
     metrics_silent = get_basic_audio_metrics(signal_silent, sr)
     assert np.isclose(metrics_silent["duration_seconds"], 1.0)
@@ -150,7 +157,8 @@ def test_get_basic_audio_metrics(sine_wave_audio, silent_audio):
 def test_detect_onsets(sine_wave_audio):
     """Test the onset detection feature."""
     # Create a signal with clear onsets
-    sr = 22050
+    # Unpack sr from fixture
+    _, sr, _ = sine_wave_audio
     clicks = librosa.clicks(times=[0.2, 0.5, 0.8], sr=sr, length=int(sr*1.2))
     signal = (clicks * 0.5).astype(np.float64)
 
@@ -171,7 +179,8 @@ def test_detect_onsets(sine_wave_audio):
 
 def test_hnr_placeholder(sine_wave_audio):
     """Test the harmonic_to_noise_ratio placeholder."""
-    signal, sr = sine_wave_audio
+    # Unpack fixture correctly, ignore frequency
+    signal, sr, _ = sine_wave_audio
     frame_length = 1024
     hop_length = 512
     hnr_result = harmonic_to_noise_ratio(signal, sr, frame_length=frame_length, hop_length=hop_length)
@@ -180,13 +189,14 @@ def test_hnr_placeholder(sine_wave_audio):
     # Check that all values are NaN
     assert np.all(np.isnan(hnr_result))
     # Check length matches expected number of frames
-    expected_num_frames = len(librosa.util.frame(signal, frame_length=frame_length, hop_length=hop_length)[0])
+    expected_num_frames = len(librosa.util.frame(signal, frame_length=frame_length, hop_length=hop_length, center=True)[0])
     assert len(hnr_result) == expected_num_frames
 
 
 def test_jitter_placeholder(sine_wave_audio):
     """Test the jitter placeholder."""
-    signal, sr = sine_wave_audio
+    # Unpack fixture correctly, ignore frequency
+    signal, sr, _ = sine_wave_audio
     frame_length = 1024
     hop_length = 512
     jitter_result = jitter(signal, sr, frame_length=frame_length, hop_length=hop_length)
@@ -195,13 +205,14 @@ def test_jitter_placeholder(sine_wave_audio):
     # Check that all values are NaN
     assert np.all(np.isnan(jitter_result))
     # Check length matches expected number of frames
-    expected_num_frames = len(librosa.util.frame(signal, frame_length=frame_length, hop_length=hop_length)[0])
+    expected_num_frames = len(librosa.util.frame(signal, frame_length=frame_length, hop_length=hop_length, center=True)[0])
     assert len(jitter_result) == expected_num_frames
 
 
 def test_shimmer_placeholder(sine_wave_audio):
     """Test the shimmer placeholder."""
-    signal, sr = sine_wave_audio
+    # Unpack fixture correctly, ignore frequency
+    signal, sr, _ = sine_wave_audio
     frame_length = 1024
     hop_length = 512
     shimmer_result = shimmer(signal, sr, frame_length=frame_length, hop_length=hop_length)
@@ -210,7 +221,7 @@ def test_shimmer_placeholder(sine_wave_audio):
     # Check that all values are NaN
     assert np.all(np.isnan(shimmer_result))
     # Check length matches expected number of frames
-    expected_num_frames = len(librosa.util.frame(signal, frame_length=frame_length, hop_length=hop_length)[0])
+    expected_num_frames = len(librosa.util.frame(signal, frame_length=frame_length, hop_length=hop_length, center=True)[0])
     assert len(shimmer_result) == expected_num_frames
 
 
