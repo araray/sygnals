@@ -7,6 +7,7 @@ CLI command for segmenting signals.
 import logging
 import click
 import numpy as np
+from numpy.typing import NDArray # <<< Added missing import here
 from pathlib import Path
 from typing import Optional, List, Tuple, Any
 
@@ -34,6 +35,7 @@ def _save_segments(
         segment_output_path = output_path / segment_filename
         try:
             # Save as WAV file for now
+            # Ensure data passed to save_data is the tuple (data, sr)
             save_data((seg_data, sr), segment_output_path, audio_subtype='PCM_16')
             saved_count += 1
         except Exception as e:
@@ -81,18 +83,23 @@ def segment_fixed_length_cmd(
 
     try:
         # 1. Read Input Data (only audio makes sense for segmentation)
-        data_result: ReadResult = read_data(input_path)
+        # Pass sr=None to read_data to get native sample rate
+        data_result: ReadResult = read_data(input_path, sr=None)
         if not isinstance(data_result, tuple) or len(data_result) != 2:
              raise click.UsageError(f"Input file '{input_path.name}' is not recognized as audio. Segmentation requires audio input.")
-        signal_data, sr = data_result
+        signal_data, sr = data_result # sr is the native sample rate here
         if signal_data.ndim != 1:
              logger.warning("Input audio is multi-channel. Converting to mono by averaging for segmentation.")
-             signal_data = np.mean(signal_data, axis=0)
+             signal_data = np.mean(signal_data, axis=0).astype(np.float64) # Ensure float64 after mean
+        else:
+             # Ensure signal_data is float64 even if mono
+             signal_data = signal_data.astype(np.float64)
+
 
         # 2. Perform Segmentation
         segments: List[NDArray[np.float64]] = segment_fixed_length(
             y=signal_data,
-            sr=sr,
+            sr=sr, # Use the actual sample rate read from the file
             segment_length_sec=length,
             overlap_ratio=overlap,
             pad=pad,
@@ -106,7 +113,7 @@ def segment_fixed_length_cmd(
 
         # 3. Save Segments
         base_filename = input_path.stem # Use input filename stem for output segments
-        _save_segments(segments, sr, output_path, base_filename)
+        _save_segments(segments, sr, output_path, base_filename) # Pass correct sr
 
         click.echo(f"Successfully segmented '{input_path.name}' into {len(segments)} segments in '{output_path}'.")
 

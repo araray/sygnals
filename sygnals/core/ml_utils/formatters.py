@@ -11,7 +11,7 @@ import logging
 import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
-from typing import Union, List, Dict, Optional, Any, Literal
+from typing import Union, List, Dict, Optional, Any, Literal, Tuple
 
 logger = logging.getLogger(__name__)
 
