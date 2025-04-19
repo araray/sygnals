@@ -14,7 +14,9 @@ from sygnals.core.data_handler import (
     SUPPORTED_READ_FORMATS, SUPPORTED_WRITE_FORMATS # Import constants
 )
 # Import audio I/O constants for checking
-from sygnals.core.audio.io import AUDIO_READ_EXTENSIONS, AUDIO_WRITE_EXTENSIONS
+# FIX: Changed imported names to match those defined in sygnals.core.audio.io
+from sygnals.core.audio.io import SUPPORTED_READ_EXTENSIONS as AUDIO_READ_EXTENSIONS
+from sygnals.core.audio.io import SUPPORTED_WRITE_EXTENSIONS as AUDIO_WRITE_EXTENSIONS
 
 # --- Test read_data ---
 
