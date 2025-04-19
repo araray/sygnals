@@ -25,16 +25,21 @@ def setup_batch_dirs(tmp_path: Path) -> Tuple[Path, Path]:
     sr = 100 # Sample rate for dummy data
     t = np.linspace(0, 1, sr, endpoint=False)
     # File 1: Sine wave
-    df1 = pd.DataFrame({"value": np.sin(2 * np.pi * 5 * t)})
+    df1 = pd.DataFrame({"time": t, "value": np.sin(2 * np.pi * 5 * t)}) # Added time column
     df1.to_csv(input_dir / "signal_sine.csv", index=False)
     # File 2: Constant value
-    df2 = pd.DataFrame({"value": np.ones(sr) * 0.5})
+    df2 = pd.DataFrame({"time": t, "value": np.ones(sr) * 0.5}) # Added time column
     df2.to_csv(input_dir / "signal_const.csv", index=False)
     # File 3: Empty value column (to test potential errors)
-    df3 = pd.DataFrame({"value": []})
+    # Ensure 'value' column exists but is empty, also add 'time'
+    df3 = pd.DataFrame({"time": pd.Series(dtype='float64'), "value": pd.Series(dtype='float64')})
     df3.to_csv(input_dir / "signal_empty.csv", index=False)
     # File 4: Non-csv file (should be ignored by current simple implementation)
     (input_dir / "other_file.txt").touch()
+    # File 5: Add a dummy WAV file
+    import soundfile as sf
+    dummy_audio = np.random.randn(sr * 2).astype(np.float64) # 2 seconds audio
+    sf.write(input_dir / "audio_noise.wav", dummy_audio, sr)
 
     return input_dir, output_dir
 
@@ -45,34 +50,36 @@ def test_process_batch_fft(setup_batch_dirs):
     input_dir, output_dir = setup_batch_dirs
 
     # Run the batch processor
-    # Note: Current implementation reads only 'value' column and flattens.
     process_batch(str(input_dir), str(output_dir), "fft")
 
     # Check that output directory was created
     assert output_dir.exists()
     assert output_dir.is_dir()
 
-    # Check that output files were created for the CSV inputs
-    out_file1 = output_dir / "signal_sine.csv_processed.csv"
-    out_file2 = output_dir / "signal_const.csv_processed.csv"
-    out_file_empty = output_dir / "signal_empty.csv_processed.csv" # Check if empty file processed
-    ignored_file = output_dir / "other_file.txt_processed.csv"
+    # Check that output files were created for the valid inputs (CSV and WAV)
+    out_file_csv1 = output_dir / "signal_sine_processed.csv"
+    out_file_csv2 = output_dir / "signal_const_processed.csv"
+    out_file_wav = output_dir / "audio_noise_processed.csv" # FFT output is CSV
+    out_file_empty = output_dir / "signal_empty_processed.csv"
+    ignored_file_txt = output_dir / "other_file_processed.csv"
 
-    assert out_file1.exists()
-    assert out_file1.stat().st_size > 0 # FFT output should not be empty
+    assert out_file_csv1.exists(), "FFT output for signal_sine.csv missing"
+    assert out_file_csv1.stat().st_size > 0
 
-    assert out_file2.exists()
-    assert out_file2.stat().st_size > 0 # FFT of constant should exist
+    assert out_file_csv2.exists(), "FFT output for signal_const.csv missing"
+    assert out_file_csv2.stat().st_size > 0
 
-    # Check how empty file was handled (depends on implementation details in batch_processor)
-    # Current batch_processor might raise error or produce empty/minimal output for empty input
-    # For now, just check existence
-    assert out_file_empty.exists()
+    assert out_file_wav.exists(), "FFT output for audio_noise.wav missing"
+    assert out_file_wav.stat().st_size > 0
 
-    assert not ignored_file.exists() # Should ignore non-csv
+    # Check how empty file was handled (should be skipped, no output file)
+    assert not out_file_empty.exists(), f"Output file for empty CSV {out_file_empty} should not exist."
+
+    # Check ignored file
+    assert not ignored_file_txt.exists(), "Output file for ignored .txt file should not exist."
 
     # Optional: Verify content of one output file
-    fft_output = read_data(out_file1)
+    fft_output = read_data(out_file_csv1)
     assert isinstance(fft_output, pd.DataFrame)
     assert "Frequency (Hz)" in fft_output.columns
     assert "Magnitude" in fft_output.columns
@@ -89,41 +96,43 @@ def test_process_batch_wavelet(setup_batch_dirs):
     # Check that output directory was created
     assert output_dir.exists()
 
-    # Check that output files were created
-    out_file1 = output_dir / "signal_sine.csv_processed.csv"
-    out_file2 = output_dir / "signal_const.csv_processed.csv"
-    out_file_empty = output_dir / "signal_empty.csv_processed.csv"
+    # Check that output files were created (expecting .npz for wavelet)
+    out_file_csv1 = output_dir / "signal_sine_processed.npz" # Expect NPZ
+    out_file_csv2 = output_dir / "signal_const_processed.npz" # Expect NPZ
+    out_file_wav = output_dir / "audio_noise_processed.npz"   # Expect NPZ
+    out_file_empty = output_dir / "signal_empty_processed.npz"
+    ignored_file_txt = output_dir / "other_file_processed.npz"
 
-    assert out_file1.exists()
-    assert out_file1.stat().st_size > 0
+    assert out_file_csv1.exists(), "Wavelet output for signal_sine.csv missing"
+    assert out_file_csv1.stat().st_size > 0
 
-    assert out_file2.exists()
-    assert out_file2.stat().st_size > 0
+    assert out_file_csv2.exists(), "Wavelet output for signal_const.csv missing"
+    assert out_file_csv2.stat().st_size > 0
 
-    assert out_file_empty.exists() # Check existence for empty input case
+    assert out_file_wav.exists(), "Wavelet output for audio_noise.wav missing"
+    assert out_file_wav.stat().st_size > 0
+
+    # Check empty/ignored files
+    assert not out_file_empty.exists(), f"Output file for empty CSV {out_file_empty} should not exist."
+    assert not ignored_file_txt.exists(), "Output file for ignored .txt file should not exist."
 
     # Optional: Verify content of one output file
-    wavelet_output = read_data(out_file1)
-    assert isinstance(wavelet_output, pd.DataFrame)
-    # Check if columns look like wavelet levels (e.g., "Level 1", "Level 2", ...)
-    assert any(col.startswith("Level ") for col in wavelet_output.columns)
-    assert len(wavelet_output) > 0 # Wavelet coeffs should exist
+    wavelet_output = read_data(out_file_csv1) # read_data handles NPZ
+    assert isinstance(wavelet_output, dict)
+    # Check if keys look like wavelet levels (e.g., "Level_0", "Level_1", ...)
+    assert any(key.startswith("Level_") for key in wavelet_output.keys())
+    assert len(wavelet_output) > 1 # Should have multiple levels
 
 
 def test_process_batch_invalid_transform(setup_batch_dirs):
     """Test batch processing with an invalid transform name."""
     input_dir, output_dir = setup_batch_dirs
 
-    # Run with an unsupported transform
-    # The current implementation doesn't explicitly handle errors for invalid transforms,
-    # it might just not produce output or raise an error depending on internal logic.
-    # We'll assume it should run without error but produce no output files for this case.
-    try:
+    # Run with an unsupported transform - expect ValueError
+    with pytest.raises(ValueError, match="Invalid transform specified: 'invalid_transform'"):
         process_batch(str(input_dir), str(output_dir), "invalid_transform")
-    except Exception as e:
-        pytest.fail(f"process_batch raised unexpected exception for invalid transform: {e}")
 
     # Check that output directory might be created, but no processed files exist
-    assert output_dir.exists()
-    processed_files = list(output_dir.glob("*_processed.csv"))
+    # (as the function should exit early)
+    processed_files = list(output_dir.glob("*_processed.*")) # Check any processed extension
     assert len(processed_files) == 0 # No files should be processed
