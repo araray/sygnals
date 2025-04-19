@@ -29,10 +29,11 @@ def sine_wave_audio():
     sr = 22050
     duration = 1.0
     freq = 440.0 # A4 note
+    amplitude = 0.7
     t = np.linspace(0, duration, int(sr * duration), endpoint=False)
-    signal = (0.7 * np.sin(2 * np.pi * freq * t)).astype(np.float64)
-    # Return all three values
-    return signal, sr, freq
+    signal = (amplitude * np.sin(2 * np.pi * freq * t)).astype(np.float64)
+    # Return all relevant parameters
+    return signal, sr, freq, amplitude
 
 @pytest.fixture
 def silent_audio():
@@ -54,8 +55,8 @@ def noise_audio():
 
 def test_zero_crossing_rate(sine_wave_audio, silent_audio, noise_audio):
     """Test the zero_crossing_rate feature."""
-    # Unpack fixture correctly
-    signal_sine, sr, freq = sine_wave_audio
+    # Unpack fixtures correctly
+    signal_sine, sr, freq, _ = sine_wave_audio
     signal_silent, _ = silent_audio
     signal_noise, _ = noise_audio
 
@@ -83,61 +84,61 @@ def test_zero_crossing_rate(sine_wave_audio, silent_audio, noise_audio):
 
 def test_rms_energy(sine_wave_audio, silent_audio):
     """Test the rms_energy feature."""
-    # Unpack fixture correctly
-    signal_sine, sr, freq = sine_wave_audio
+    # Unpack fixtures correctly
+    signal_sine, sr, _, amplitude = sine_wave_audio # Get amplitude
     signal_silent, _ = silent_audio
 
     frame_length = 1024
     hop_length = 512
 
     # RMS for sine wave (should be related to amplitude)
-    rms_sine = rms_energy(signal_sine, frame_length=frame_length, hop_length=hop_length)
+    rms_sine = rms_energy(y=signal_sine, frame_length=frame_length, hop_length=hop_length)
     assert rms_sine.ndim == 1
     assert rms_sine.dtype == np.float64
     assert np.all(rms_sine >= 0)
     # Expected RMS for A*sin(wt) is A/sqrt(2)
-    amplitude = 0.7 # From fixture
     expected_rms_sine = amplitude / np.sqrt(2)
     assert_allclose(np.mean(rms_sine), expected_rms_sine, atol=0.05) # Check average RMS
 
     # RMS for silence (should be zero)
-    rms_silent = rms_energy(signal_silent, frame_length=frame_length, hop_length=hop_length)
+    rms_silent = rms_energy(y=signal_silent, frame_length=frame_length, hop_length=hop_length)
     assert_allclose(rms_silent, 0.0, atol=1e-7)
 
 
 def test_fundamental_frequency(sine_wave_audio, silent_audio):
     """Test the fundamental_frequency (pitch) estimation."""
-    # Unpack fixture correctly
-    signal_sine, sr, freq = sine_wave_audio
+    # Unpack fixtures correctly
+    signal_sine, sr, freq, _ = sine_wave_audio
     signal_silent, _ = silent_audio
 
     # Test with pyin
     times_p, f0_p, vf_p, vp_p = fundamental_frequency(signal_sine, sr=sr, method='pyin')
     assert times_p.ndim == 1 and f0_p.ndim == 1 and vf_p.ndim == 1 and vp_p.ndim == 1
     assert f0_p.dtype == np.float64 # Check output type
+    assert vf_p.dtype == np.float64 # Voiced flag stored as float
     # Check if estimated pitch is close to the actual frequency for voiced frames
-    voiced_indices = np.where(vf_p > 0.5)[0] # Get indices where voiced flag is 1
+    voiced_indices = np.where(vf_p > 0.5)[0] # Get indices where voiced flag is 1 (float comparison)
     assert len(voiced_indices) > 0 # Sine wave should be mostly voiced
-    assert_allclose(f0_p[voiced_indices], freq, rtol=0.1) # Allow 10% tolerance for pitch estimation
+    # Check mean F0 in voiced frames
+    assert_allclose(np.mean(f0_p[voiced_indices]), freq, rtol=0.05) # Allow 5% tolerance for pitch estimation mean
 
     # Test with yin
     times_y, f0_y, vf_y, vp_y = fundamental_frequency(signal_sine, sr=sr, method='yin')
     voiced_indices_y = np.where(vf_y > 0.5)[0]
     assert len(voiced_indices_y) > 0
-    assert_allclose(f0_y[voiced_indices_y], freq, rtol=0.1)
+    assert_allclose(np.mean(f0_y[voiced_indices_y]), freq, rtol=0.05)
 
     # Test on silence (should be mostly unvoiced, f0 near zero)
     times_s, f0_s, vf_s, vp_s = fundamental_frequency(signal_silent, sr=sr, method='pyin')
     assert np.sum(vf_s) < 0.1 * len(vf_s) # Expect very few voiced frames
-    assert_allclose(f0_s, 0.0, atol=1.0) # F0 should be near zero (or NaN replaced by 0)
+    assert_allclose(f0_s, 0.0, atol=1.0) # F0 should be zero (NaN replaced by 0)
 
 
 def test_get_basic_audio_metrics(sine_wave_audio, silent_audio):
     """Test the get_basic_audio_metrics function."""
-    # Unpack fixture correctly
-    signal_sine, sr, freq = sine_wave_audio
+    # Unpack fixtures correctly
+    signal_sine, sr, _, amplitude = sine_wave_audio
     signal_silent, _ = silent_audio
-    amplitude = 0.7 # From fixture
 
     metrics_sine = get_basic_audio_metrics(signal_sine, sr)
     assert isinstance(metrics_sine, dict)
@@ -158,29 +159,33 @@ def test_detect_onsets(sine_wave_audio):
     """Test the onset detection feature."""
     # Create a signal with clear onsets
     # Unpack sr from fixture
-    _, sr, _ = sine_wave_audio
-    clicks = librosa.clicks(times=[0.2, 0.5, 0.8], sr=sr, length=int(sr*1.2))
+    _, sr, _, _ = sine_wave_audio
+    click_times = np.array([0.2, 0.5, 0.8])
+    clicks = librosa.clicks(times=click_times, sr=sr, length=int(sr*1.2))
     signal = (clicks * 0.5).astype(np.float64)
+    hop_length = 256 # Use a smaller hop for better time resolution
 
-    onset_frames = detect_onsets(signal, sr=sr, backtrack=False) # Use backtrack=False for simpler check
+    # Test getting onset frames
+    onset_frames = detect_onsets(y=signal, sr=sr, hop_length=hop_length, units='frames', backtrack=False)
     assert onset_frames.ndim == 1
     assert onset_frames.dtype == np.int64
 
-    # Convert frames to times
-    onset_times = librosa.frames_to_time(onset_frames, sr=sr)
+    # Test getting onset times
+    onset_times = detect_onsets(y=signal, sr=sr, hop_length=hop_length, units='time', backtrack=False)
+    assert onset_times.ndim == 1
+    assert onset_times.dtype == np.float64
 
     # Check if detected times are close to the actual click times
-    expected_times = np.array([0.2, 0.5, 0.8])
-    assert len(onset_times) == len(expected_times)
-    assert_allclose(onset_times, expected_times, atol=0.05) # Allow 50ms tolerance
+    assert len(onset_times) == len(click_times)
+    assert_allclose(onset_times, click_times, atol=0.05) # Allow 50ms tolerance
 
 
 # --- Tests for Placeholder Features ---
 
 def test_hnr_placeholder(sine_wave_audio):
     """Test the harmonic_to_noise_ratio placeholder."""
-    # Unpack fixture correctly, ignore frequency
-    signal, sr, _ = sine_wave_audio
+    # Unpack fixture correctly, ignore frequency/amplitude
+    signal, sr, _, _ = sine_wave_audio
     frame_length = 1024
     hop_length = 512
     hnr_result = harmonic_to_noise_ratio(signal, sr, frame_length=frame_length, hop_length=hop_length)
@@ -189,14 +194,14 @@ def test_hnr_placeholder(sine_wave_audio):
     # Check that all values are NaN
     assert np.all(np.isnan(hnr_result))
     # Check length matches expected number of frames for centered analysis
-    expected_num_frames = 1 + int(np.floor(len(signal) / hop_length))
+    expected_num_frames = 1 + len(signal) // hop_length
     assert len(hnr_result) == expected_num_frames
 
 
 def test_jitter_placeholder(sine_wave_audio):
     """Test the jitter placeholder."""
-    # Unpack fixture correctly, ignore frequency
-    signal, sr, _ = sine_wave_audio
+    # Unpack fixture correctly, ignore frequency/amplitude
+    signal, sr, _, _ = sine_wave_audio
     frame_length = 1024
     hop_length = 512
     jitter_result = jitter(signal, sr, frame_length=frame_length, hop_length=hop_length)
@@ -205,14 +210,14 @@ def test_jitter_placeholder(sine_wave_audio):
     # Check that all values are NaN
     assert np.all(np.isnan(jitter_result))
     # Check length matches expected number of frames for centered analysis
-    expected_num_frames = 1 + int(np.floor(len(signal) / hop_length))
+    expected_num_frames = 1 + len(signal) // hop_length
     assert len(jitter_result) == expected_num_frames
 
 
 def test_shimmer_placeholder(sine_wave_audio):
     """Test the shimmer placeholder."""
-    # Unpack fixture correctly, ignore frequency
-    signal, sr, _ = sine_wave_audio
+    # Unpack fixture correctly, ignore frequency/amplitude
+    signal, sr, _, _ = sine_wave_audio
     frame_length = 1024
     hop_length = 512
     shimmer_result = shimmer(signal, sr, frame_length=frame_length, hop_length=hop_length)
@@ -221,7 +226,7 @@ def test_shimmer_placeholder(sine_wave_audio):
     # Check that all values are NaN
     assert np.all(np.isnan(shimmer_result))
     # Check length matches expected number of frames for centered analysis
-    expected_num_frames = 1 + int(np.floor(len(signal) / hop_length))
+    expected_num_frames = 1 + len(signal) // hop_length
     assert len(shimmer_result) == expected_num_frames
 
 
