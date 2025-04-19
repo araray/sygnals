@@ -6,9 +6,10 @@ Tests for the Sygnals plugin system (loading, registration, management).
 
 import pytest
 import sys
+import traceback # Added for detailed exception printing in tests
 from pathlib import Path
-import toml
-from typing import Dict, Any, List, Optional, Tuple, Set, Type
+import toml # For creating dummy manifests
+from typing import Optional # Import Optional for type hinting
 
 # Import components to test
 from sygnals.config.models import SygnalsConfig, PathsConfig
@@ -19,13 +20,17 @@ from sygnals.version import __version__ as core_version
 
 from click.testing import CliRunner
 from sygnals.cli.main import cli # Import main CLI entry point
+# Import base_cmd to potentially patch the loader there
+from sygnals.cli import base_cmd as sygnals_base_cmd
 
 # --- Test Fixtures ---
 
 @pytest.fixture
 def plugin_registry() -> PluginRegistry:
     """Provides a fresh PluginRegistry instance for each test."""
-    return PluginRegistry()
+    # Reset the global registry instance potentially used by base_cmd
+    sygnals_base_cmd.plugin_registry = PluginRegistry()
+    return sygnals_base_cmd.plugin_registry
 
 @pytest.fixture
 def base_config(tmp_path: Path) -> SygnalsConfig:
@@ -45,7 +50,10 @@ def base_config(tmp_path: Path) -> SygnalsConfig:
 @pytest.fixture
 def plugin_loader(base_config: SygnalsConfig, plugin_registry: PluginRegistry) -> PluginLoader:
     """Provides a PluginLoader instance initialized with temp config and fresh registry."""
-    return PluginLoader(base_config, plugin_registry)
+    loader = PluginLoader(base_config, plugin_registry)
+    # Also update the global instance that might be used by CLI commands if not patched
+    sygnals_base_cmd.plugin_loader = loader
+    return loader
 
 @pytest.fixture
 def teardown_sys_path():
@@ -69,7 +77,12 @@ def create_dummy_plugin(
 ):
     """Creates a dummy plugin directory structure and files."""
     plugin_root = plugin_dir / name
+    # Ensure clean state if directory exists from previous failed run
+    if plugin_root.exists():
+        import shutil
+        shutil.rmtree(plugin_root)
     plugin_root.mkdir()
+    # Use the provided 'name' argument for generating package/class names
     package_name = name.replace("-", "_")
     class_name = "".join(part.capitalize() for part in name.split('-')) + "Plugin"
     entry_module = package_name
@@ -177,7 +190,7 @@ def test_skip_incompatible_plugin(plugin_loader: PluginLoader, base_config: Sygn
     plugin_loader.discover_and_load()
 
     assert plugin_name not in plugin_loader.loaded_plugins
-    # Manifest should still be found for listing purposes
+    # Manifest should be stored even if incompatible
     assert plugin_name in plugin_loader.plugin_manifests
     assert plugin_loader.plugin_sources[plugin_name] == 'local'
     assert not plugin_loader.registry.loaded_plugin_names
@@ -223,7 +236,8 @@ entry_point = "invalid.plugin:InvalidPlugin"
 
     plugin_loader.discover_and_load()
     assert plugin_name not in plugin_loader.loaded_plugins
-    assert plugin_name not in plugin_loader.plugin_manifests # Should fail parsing
+    # Invalid manifest means it shouldn't even be stored
+    assert plugin_name not in plugin_loader.plugin_manifests
 
 
 def test_handle_entry_point_import_error(plugin_loader: PluginLoader, base_config: SygnalsConfig):
@@ -243,7 +257,9 @@ entry_point = "non_existent_module.plugin:NonExistentPlugin"
 
     plugin_loader.discover_and_load()
     assert plugin_name not in plugin_loader.loaded_plugins
-    assert plugin_name in plugin_loader.plugin_manifests # Found but failed import
+    # Manifest should be stored even if import fails later
+    assert plugin_name in plugin_loader.plugin_manifests
+    assert plugin_loader.plugin_sources[plugin_name] == 'local'
 
 
 def test_handle_entry_point_not_subclass(plugin_loader: PluginLoader, base_config: SygnalsConfig, teardown_sys_path):
@@ -255,23 +271,50 @@ def test_handle_entry_point_not_subclass(plugin_loader: PluginLoader, base_confi
 class NotAPlugin:
     pass
 """
-    create_dummy_plugin(plugin_dir, plugin_name, entry_point_content=plugin_content)
-    # Need to adjust the manifest entry point to point to the wrong class
+    # Create the dummy plugin structure first
+    _, entry_point_path = create_dummy_plugin(plugin_dir, plugin_name)
+    # Modify the generated plugin.py
+    # FIX: Use plugin_name here instead of undefined 'name'
+    package_name = plugin_name.replace("-", "_")
+    class_name_correct = "".join(part.capitalize() for part in plugin_name.split('-')) + "Plugin"
+    class_name_wrong = "NotAPlugin" # The class we actually want to test
+    plugin_py_path = plugin_dir / plugin_name / package_name / "plugin.py"
+    plugin_py_content_wrong_class = f"""
+import logging
+# NOTE: Intentionally NOT importing SygnalsPluginBase
+logger = logging.getLogger(__name__)
+
+class {class_name_wrong}: # Class doesn't inherit!
+    pass
+
+# Keep the original class name definition too, just in case import logic needs it initially
+# but the manifest points to the wrong one.
+class {class_name_correct}:
+    pass
+
+"""
+    plugin_py_path.write_text(plugin_py_content_wrong_class)
+
+
+    # Adjust the manifest entry point to point to the wrong class
     manifest_path = plugin_dir / plugin_name / "plugin.toml"
     manifest_data = toml.load(manifest_path)
-    manifest_data['entry_point'] = manifest_data['entry_point'].replace('Plugin', 'NotAPlugin')
+    manifest_data['entry_point'] = f"{package_name}.plugin:{class_name_wrong}" # Point to wrong class
     manifest_path.write_text(toml.dumps(manifest_data))
 
 
     plugin_loader.discover_and_load()
     assert plugin_name not in plugin_loader.loaded_plugins
-    assert plugin_name in plugin_loader.plugin_manifests # Found but failed validation
+    # Manifest should be stored even if class validation fails
+    assert plugin_name in plugin_loader.plugin_manifests
+    assert plugin_loader.plugin_sources[plugin_name] == 'local'
 
 
 def test_plugin_state_save_load(base_config: SygnalsConfig):
     """Test saving and loading plugin enabled/disabled state."""
     state_dir = base_config.paths.plugin_dir.parent
-    state_file = state_dir / "plugins.yaml" # Using .yaml as defined constant
+    # Use the constant defined in loader.py for consistency
+    state_file = state_dir / PluginLoader.PLUGIN_STATE_FILENAME
 
     # Initial state: file doesn't exist, load should return empty dict
     assert not state_file.exists()
@@ -288,21 +331,37 @@ def test_plugin_state_save_load(base_config: SygnalsConfig):
     assert loaded_state2 == state_to_save
 
 
-def test_plugin_list_cli(base_config: SygnalsConfig, teardown_sys_path):
+def test_plugin_list_cli(plugin_loader: PluginLoader, base_config: SygnalsConfig, teardown_sys_path, mocker):
     """Test the 'sygnals plugin list' command."""
     plugin_dir = base_config.paths.plugin_dir
-    # Create one loaded, one disabled, one incompatible
+    # Create one loaded, one disabled, one incompatible using the fixture's loader
     create_dummy_plugin(plugin_dir, "plugin-loaded", version="1.0", register_hook="register_filters")
     create_dummy_plugin(plugin_dir, "plugin-disabled", version="1.1", is_enabled=False)
     create_dummy_plugin(plugin_dir, "plugin-incomp", version="1.2", api_req=">=99.0")
 
+    # Ensure the fixture's loader has processed these plugins
+    plugin_loader.discover_and_load()
+
+    # Patch the loader instance used within the CLI context
+    # Target the global variable in base_cmd that ConfigGroup uses
+    mocker.patch('sygnals.cli.base_cmd.plugin_loader', plugin_loader)
+    # Also patch load_configuration to return the test config
+    mocker.patch('sygnals.cli.base_cmd.load_configuration', return_value=base_config)
+
+
     runner = CliRunner()
-    # Need to invoke the main CLI so the plugin loader runs via ConfigGroup
     result = runner.invoke(cli, ["plugin", "list"])
+
+    print("CLI Output:\n", result.output) # Print output for debugging
+    if result.exception:
+        print("Exception:\n", result.exception)
+        traceback.print_tb(result.exc_info[2])
+
 
     assert result.exit_code == 0
     assert "plugin-loaded" in result.output
     assert "1.0" in result.output
+    # FIX: Check for plain text status instead of Rich formatting
     assert "loaded" in result.output
     assert "plugin-disabled" in result.output
     assert "1.1" in result.output
@@ -313,17 +372,27 @@ def test_plugin_list_cli(base_config: SygnalsConfig, teardown_sys_path):
     assert "local" in result.output # Check source
 
 
-def test_plugin_enable_disable_cli(base_config: SygnalsConfig, teardown_sys_path):
+def test_plugin_enable_disable_cli(plugin_loader: PluginLoader, base_config: SygnalsConfig, teardown_sys_path, mocker):
     """Test the 'sygnals plugin enable/disable' commands."""
     plugin_dir = base_config.paths.plugin_dir
     state_dir = plugin_dir.parent
     plugin_name = "plugin-toggle"
     create_dummy_plugin(plugin_dir, plugin_name, is_enabled=True) # Start enabled
 
+    # Ensure the fixture's loader has processed this plugin's manifest
+    plugin_loader.discover_and_load()
+
+    # Patch the loader instance used within the CLI context
+    mocker.patch('sygnals.cli.base_cmd.plugin_loader', plugin_loader)
+    mocker.patch('sygnals.cli.base_cmd.load_configuration', return_value=base_config)
+
+
     runner = CliRunner()
 
     # Disable the plugin
     result_disable = runner.invoke(cli, ["plugin", "disable", plugin_name])
+    print("Disable CLI Output:\n", result_disable.output)
+    if result_disable.exception: print("Exception:\n", result_disable.exception)
     assert result_disable.exit_code == 0
     assert "disabled" in result_disable.output
     # Check state file
@@ -332,6 +401,8 @@ def test_plugin_enable_disable_cli(base_config: SygnalsConfig, teardown_sys_path
 
     # Enable the plugin
     result_enable = runner.invoke(cli, ["plugin", "enable", plugin_name])
+    print("Enable CLI Output:\n", result_enable.output)
+    if result_enable.exception: print("Exception:\n", result_enable.exception)
     assert result_enable.exit_code == 0
     assert "enabled" in result_enable.output
     # Check state file
@@ -340,19 +411,33 @@ def test_plugin_enable_disable_cli(base_config: SygnalsConfig, teardown_sys_path
 
     # Try disabling non-existent plugin
     result_disable_bad = runner.invoke(cli, ["plugin", "disable", "non-existent"])
+    print("Disable Bad CLI Output:\n", result_disable_bad.output)
+    if result_disable_bad.exception: print("Exception:\n", result_disable_bad.exception)
     assert result_disable_bad.exit_code == 1 # Should exit with error
     assert "Error" in result_disable_bad.output
-    assert "Not found" in result_disable_bad.output
+    assert "Not found" in result_disable_bad.output # Check specific message
 
 
-def test_plugin_scaffold_cli(tmp_path: Path):
+def test_plugin_scaffold_cli(tmp_path: Path, mocker):
     """Test the 'sygnals plugin scaffold' command."""
+     # Mock load_configuration to prevent issues finding default config files
+    mocker.patch('sygnals.cli.base_cmd.load_configuration', return_value=SygnalsConfig())
+    # Mock discover_and_load to prevent scanning during scaffold command
+    mocker.patch('sygnals.plugins.loader.PluginLoader.discover_and_load', return_value=None)
+
+
     runner = CliRunner()
     plugin_name = "my-scaffolded-plugin"
     dest_dir = tmp_path / "scaffold_dest"
-    dest_dir.mkdir()
+    # No need to mkdir, scaffold command should handle it if needed by create_plugin_scaffold
 
     result = runner.invoke(cli, ["plugin", "scaffold", plugin_name, "--dest", str(dest_dir)])
+
+    print("Scaffold CLI Output:\n", result.output) # Print output for debugging
+    if result.exception:
+        print("Exception:\n", result.exception)
+        import traceback
+        traceback.print_tb(result.exc_info[2])
 
     assert result.exit_code == 0
     assert "Plugin template" in result.output

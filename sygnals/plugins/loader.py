@@ -152,29 +152,29 @@ class PluginLoader:
         self.plugin_sources: Dict[str, str] = {} # Store source ('entry_point' or 'local')
         self.plugin_enabled_state: Dict[str, bool] = {} # Store enabled/disabled status
 
-    def _load_and_register(self, manifest_data: Dict[str, Any], manifest_path: Path, source: str):
-        """Loads, validates, and registers a single plugin."""
-        plugin_name = manifest_data['name']
+    def _load_and_register(self, plugin_name: str, manifest_path: Path):
+        """
+        Loads, validates, and registers a single plugin *after* its manifest
+        has been parsed and stored.
+        """
+        # Manifest data should already be in self.plugin_manifests
+        manifest_data = self.plugin_manifests.get(plugin_name)
+        if not manifest_data:
+             logger.error(f"Internal error: Manifest data not found for '{plugin_name}' during load attempt.")
+             return # Should not happen if called correctly
+
         plugin_version = manifest_data['version']
         api_spec = manifest_data['sygnals_api']
         entry_point_str = manifest_data['entry_point']
-
-        # 0. Check if already loaded
-        if plugin_name in self.loaded_plugins:
-             logger.warning(f"Plugin '{plugin_name}' already loaded. Skipping duplicate from {manifest_path}.")
-             return
 
         # 1. Check compatibility
         if not _check_compatibility(plugin_name, plugin_version, api_spec, core_version):
             return # Skip incompatible plugin
 
         # 2. Check enabled state
-        if not self.plugin_enabled_state.get(plugin_name, True): # Default to enabled if not in state file
-             logger.info(f"Skipping disabled plugin '{plugin_name}' v{plugin_version} from {manifest_path}.")
-             # Store manifest and source even if disabled, for listing purposes
-             self.plugin_manifests[plugin_name] = manifest_data
-             self.plugin_sources[plugin_name] = source
-             return
+        if not self.plugin_enabled_state.get(plugin_name, True): # Default to enabled
+             logger.info(f"Skipping disabled plugin '{plugin_name}' v{plugin_version}.")
+             return # Skip disabled plugin
 
         # 3. Import entry point
         plugin_class = _import_plugin_entry_point(entry_point_str, manifest_path)
@@ -189,7 +189,6 @@ class PluginLoader:
                  logger.warning(f"Manifest/Instance mismatch for plugin '{plugin_name}'. "
                                 f"Manifest: ({plugin_name}, {plugin_version}), "
                                 f"Instance: ({plugin_instance.name}, {plugin_instance.version}). Using instance values.")
-                 # Optionally update manifest_data based on instance? For now, just warn.
         except Exception as e:
             logger.error(f"Failed to instantiate plugin '{plugin_name}' from {entry_point_str}: {e}", exc_info=True)
             return
@@ -222,10 +221,9 @@ class PluginLoader:
 
         # 7. Store successful load
         self.loaded_plugins[plugin_name] = plugin_instance
-        self.plugin_manifests[plugin_name] = manifest_data
-        self.plugin_sources[plugin_name] = source
+        # Manifest and source already stored during discovery
         self.registry.add_plugin_name(plugin_name) # Add name to registry's list
-        logger.info(f"Successfully loaded and registered plugin: '{plugin_name}' v{plugin_version} ({source})")
+        logger.info(f"Successfully loaded and registered plugin: '{plugin_name}' v{plugin_version} ({self.plugin_sources.get(plugin_name, '?')})")
 
 
     def discover_and_load(self):
@@ -234,29 +232,16 @@ class PluginLoader:
         discovered_manifest_paths: Dict[str, Tuple[Path, str]] = {} # name -> (path, source)
 
         # --- Load Enabled State ---
-        self.plugin_enabled_state = _load_plugin_state(self.config.paths.plugin_dir.parent) # State file in parent dir
+        # State file should be relative to config dir, not necessarily plugin dir parent
+        # Using config.paths.plugin_dir.parent assumes state file is alongside plugin dir folder
+        # A better location might be ~/.config/sygnals/ or similar. Using plugin_dir.parent for now.
+        state_file_dir = self.config.paths.plugin_dir.parent
+        self.plugin_enabled_state = _load_plugin_state(state_file_dir)
+        logger.debug(f"Loaded plugin enabled/disabled state from {state_file_dir}: {self.plugin_enabled_state}")
 
         # --- Discover Entry Points ---
-        try:
-            entry_points = importlib.metadata.entry_points(group='sygnals.plugins')
-            for ep in entry_points:
-                logger.debug(f"Found entry point: {ep.name} = {ep.value}")
-                try:
-                    # Need to find the manifest associated with the entry point.
-                    # This is tricky. One way is to load the module and look for a
-                    # standard location relative to the module file.
-                    # For now, we assume the entry point itself might provide enough info
-                    # or that the manifest parsing happens later.
-                    # Let's assume the entry point loading handles manifest finding internally
-                    # or we parse manifests separately.
-                    # --> Simplification: We can't easily get the manifest path from entry point alone.
-                    # --> We'll load based on entry point value later if needed, but prioritize manifest-based loading.
-                    # --> For now, log the discovery but rely on manifest parsing below.
-                    pass
-                except Exception as e:
-                    logger.warning(f"Could not process entry point '{ep.name}': {e}")
-        except Exception as e:
-            logger.error(f"Error discovering entry points: {e}")
+        # (Skipping entry point discovery for now as it's complex to map back to manifests reliably)
+        logger.debug("Entry point discovery currently skipped.")
 
         # --- Discover Local Plugins ---
         local_plugin_dir = self.config.paths.plugin_dir
@@ -270,23 +255,29 @@ class PluginLoader:
                         manifest_data = _parse_manifest(manifest_path)
                         if manifest_data:
                             plugin_name = manifest_data['name']
-                            if plugin_name in discovered_manifest_paths:
+                            if plugin_name in self.plugin_manifests: # Check if already discovered
                                 logger.warning(f"Duplicate plugin name '{plugin_name}' found. Prioritizing first discovery.")
                             else:
-                                discovered_manifest_paths[plugin_name] = (manifest_path, 'local')
+                                # FIX: Store manifest and source immediately after parsing
+                                self.plugin_manifests[plugin_name] = manifest_data
+                                self.plugin_sources[plugin_name] = 'local'
+                                discovered_manifest_paths[plugin_name] = (manifest_path, 'local') # Keep track for loading loop
         else:
             logger.debug(f"Local plugin directory not found or not a directory: {local_plugin_dir}")
 
-        # --- TODO: Discover Entry Point Manifests (More complex) ---
-        # This would involve finding the installed package location for each entry point
-        # and searching for the manifest file there. Skipping for simplicity for now.
 
         # --- Load and Register Discovered Plugins ---
-        logger.info(f"Found {len(discovered_manifest_paths)} potential plugin manifests. Loading...")
-        for name, (path, source) in discovered_manifest_paths.items():
-            manifest_data = _parse_manifest(path) # Re-parse (or use cached)
-            if manifest_data:
-                self._load_and_register(manifest_data, path, source)
+        logger.info(f"Found {len(self.plugin_manifests)} potential plugin manifests. Attempting to load...")
+        # Iterate through the names found during discovery
+        for name in list(self.plugin_manifests.keys()): # Use list to avoid dict size change issues
+             if name in discovered_manifest_paths: # Check if it was found in this run's discovery
+                 path, source = discovered_manifest_paths[name]
+                 # Attempt to load and register this specific plugin
+                 self._load_and_register(name, path)
+             else:
+                 # This case might occur if manifest was stored from a previous run but not found now
+                 logger.debug(f"Plugin '{name}' manifest exists but was not discovered in this run. Skipping load attempt.")
+
 
         logger.info(f"Plugin loading complete. {len(self.loaded_plugins)} plugins loaded successfully.")
 
@@ -300,7 +291,21 @@ class PluginLoader:
             source = self.plugin_sources.get(name, 'unknown')
             is_loaded = name in self.loaded_plugins
             is_enabled = self.plugin_enabled_state.get(name, True) # Default enabled
-            status = "loaded" if is_loaded else ("disabled" if not is_enabled else "error/incompatible")
+            # Determine status more accurately
+            status = "unknown"
+            if not is_enabled:
+                 status = "disabled"
+            elif is_loaded:
+                 status = "loaded"
+            elif manifest: # Manifest exists but not loaded/disabled
+                 # Check compatibility again to determine reason
+                 if _check_compatibility(name, manifest.get('version','?'), manifest.get('sygnals_api','?'), core_version):
+                     status = "error/load_failed" # Compatible but failed load/import/setup
+                 else:
+                     status = "error/incompatible"
+            else:
+                 status = "error/no_manifest" # Should not happen if name is from plugin_manifests keys
+
 
             info_list.append({
                 "name": name,
@@ -315,22 +320,28 @@ class PluginLoader:
 
     def enable_plugin(self, name: str):
         """Mark a plugin as enabled."""
+        # Check manifests first, as plugin might be discovered but not loaded
         if name not in self.plugin_manifests:
-             logger.error(f"Cannot enable plugin '{name}': Not found.")
+             logger.error(f"Cannot enable plugin '{name}': Not found (no manifest discovered).")
              return False
         logger.info(f"Enabling plugin '{name}'.")
         self.plugin_enabled_state[name] = True
-        _save_plugin_state(self.config.paths.plugin_dir.parent, self.plugin_enabled_state)
+        # Use the same logic for state file location as in load
+        state_file_dir = self.config.paths.plugin_dir.parent
+        _save_plugin_state(state_file_dir, self.plugin_enabled_state)
         return True
 
     def disable_plugin(self, name: str):
         """Mark a plugin as disabled."""
+        # Check manifests first
         if name not in self.plugin_manifests:
-             logger.error(f"Cannot disable plugin '{name}': Not found.")
+             logger.error(f"Cannot disable plugin '{name}': Not found (no manifest discovered).")
              return False
         logger.info(f"Disabling plugin '{name}'.")
         self.plugin_enabled_state[name] = False
-        _save_plugin_state(self.config.paths.plugin_dir.parent, self.plugin_enabled_state)
+        # Use the same logic for state file location as in load
+        state_file_dir = self.config.paths.plugin_dir.parent
+        _save_plugin_state(state_file_dir, self.plugin_enabled_state)
         return True
 
     def call_teardown_hooks(self):
@@ -343,6 +354,4 @@ class PluginLoader:
                 logger.error(f"Error during teardown for plugin '{name}': {e}", exc_info=True)
 
 # --- Global instance (optional, depends on application structure) ---
-# You might instantiate the registry and loader globally or pass them around.
-# Example:
 # global_plugin_registry = PluginRegistry()

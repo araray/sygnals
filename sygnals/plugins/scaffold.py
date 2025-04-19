@@ -7,6 +7,7 @@ Provides functionality to generate a basic plugin template structure.
 import logging
 import re
 from pathlib import Path
+from packaging.version import Version # <-- ADDED IMPORT
 
 from sygnals.version import __version__ as core_version
 
@@ -103,7 +104,7 @@ from .{package_name}.plugin import {class_name}
 __all__ = ["{class_name}"]
 """
 
-PLUGIN_PY_TEMPLATE ="""\
+PLUGIN_PY_TEMPLATE = """\
 # {package_name}/plugin.py
 
 \"\"\"
@@ -266,7 +267,7 @@ def create_plugin_scaffold(plugin_name: str, destination_dir: Path):
         package_dir.mkdir()
 
         # --- Get core version info for templates ---
-        core_v = Version(core_version)
+        core_v = Version(core_version) # Use imported Version
         core_version_major_minor = f"{core_v.major}.{core_v.minor}"
         core_version_major = core_v.major
 
