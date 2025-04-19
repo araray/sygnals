@@ -78,6 +78,7 @@ class ConfigGroup(click.Group):
             global plugin_loader, plugin_registry # Use global instances
             if 'plugin_loader' not in ctx.obj:
                 logger.debug("Initializing Plugin System...")
+                # Ensure registry passed to loader is the global one used elsewhere
                 plugin_loader = PluginLoader(config, plugin_registry)
                 plugin_loader.discover_and_load() # Discover and load plugins
                 ctx.obj['plugin_loader'] = plugin_loader
@@ -93,12 +94,17 @@ class ConfigGroup(click.Group):
             # 4. Proceed with the actual group/command invocation
             return super().invoke(ctx)
 
+        except click.exceptions.Exit as e:
+            # Re-raise Exit exceptions to let Click handle them (e.g., for --help)
+            # This prevents logging Exit(0) as a critical error.
+            raise e
         except Exception as e:
-            # Log critical errors during setup
+            # Log other critical errors during setup
             setup_logger = logging.getLogger("sygnals.setup.error")
-            setup_logger.critical(f"Critical error during CLI setup (config/log/plugin): {e}", exc_info=True)
+            # Use repr(e) to potentially get more info than just str(e)
+            setup_logger.critical(f"Critical error during CLI setup (config/log/plugin): {repr(e)}", exc_info=True)
             # Use basic print as fallback if logging failed
-            print(f"CRITICAL SETUP ERROR: {e}", file=sys.stderr)
+            print(f"CRITICAL SETUP ERROR: {repr(e)}", file=sys.stderr)
             # Exit cleanly on setup error
             ctx.exit(1)
 
