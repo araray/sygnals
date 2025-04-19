@@ -10,10 +10,12 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from click.testing import CliRunner
+from numpy.testing import assert_allclose # Import assert_allclose
 
 # Import the main CLI entry point and the command group/functions to test/mock
 from sygnals.cli.main import cli
-from sygnals.core.ml_utils import scaling # To mock apply_scaling
+# Import the module to patch, but patch where it's *used*
+# from sygnals.core.ml_utils import scaling # Don't need this for patching target
 from sygnals.core.ml_utils.scaling import _SKLEARN_AVAILABLE # To conditionally skip
 
 # --- Test Fixtures ---
@@ -21,7 +23,8 @@ from sygnals.core.ml_utils.scaling import _SKLEARN_AVAILABLE # To conditionally 
 @pytest.fixture
 def runner() -> CliRunner:
     """Provides a Click CliRunner instance."""
-    return CliRunner()
+    # Capture stderr for checking error messages
+    return CliRunner(mix_stderr=False)
 
 @pytest.fixture
 def sample_features_csv(tmp_path: Path) -> Path:
@@ -49,6 +52,7 @@ def sample_features_npz(tmp_path: Path) -> Path:
 @pytest.fixture
 def mock_save_data(mocker):
     """Mocks the save_data function used by the CLI command."""
+    # Mock save_data where it's called in the CLI module
     mock = mocker.patch("sygnals.cli.features_cmd.save_data")
     return mock
 
@@ -61,9 +65,10 @@ def test_features_transform_scale_csv_success(runner: CliRunner, sample_features
     output_file = input_file.parent / "scaled_features.csv"
     scaler_type = 'standard'
 
-    # Mock the core scaling function to check args and return dummy scaled data
+    # Mock the core scaling function where it's called in the CLI module
+    # FIX: Correct patch target
     dummy_scaled_data = np.random.rand(10, 2) # Shape matches numeric columns in CSV
-    mock_apply_scaling = mocker.patch.object(scaling, 'apply_scaling', return_value=(dummy_scaled_data, None)) # Don't care about scaler instance here
+    mock_apply_scaling = mocker.patch("sygnals.cli.features_cmd.apply_scaling", return_value=(dummy_scaled_data, None)) # Don't care about scaler instance here
 
     args = [
         "features", "transform", "scale", str(input_file),
@@ -73,7 +78,8 @@ def test_features_transform_scale_csv_success(runner: CliRunner, sample_features
 
     result = runner.invoke(cli, args)
 
-    print("CLI Output:\n", result.output) # For debugging
+    print("CLI Output:\n", result.output) # For debugging stdout
+    print("CLI Stderr:\n", result.stderr) # For debugging stderr
     if result.exception: print("Exception:\n", result.exception)
 
     assert result.exit_code == 0, f"CLI exited with code {result.exit_code}"
@@ -104,9 +110,10 @@ def test_features_transform_scale_npz_success(runner: CliRunner, sample_features
     output_file = input_file.parent / "scaled_features.npz"
     scaler_type = 'minmax'
 
-    # Mock the core scaling function
+    # Mock the core scaling function where it's called
+    # FIX: Correct patch target
     dummy_scaled_data = np.random.rand(20, 3) # Shape matches 'data' array in NPZ
-    mock_apply_scaling = mocker.patch.object(scaling, 'apply_scaling', return_value=(dummy_scaled_data, None))
+    mock_apply_scaling = mocker.patch("sygnals.cli.features_cmd.apply_scaling", return_value=(dummy_scaled_data, None))
 
     args = [
         "features", "transform", "scale", str(input_file),
@@ -115,6 +122,10 @@ def test_features_transform_scale_npz_success(runner: CliRunner, sample_features
     ]
 
     result = runner.invoke(cli, args)
+
+    print("CLI Output:\n", result.output) # For debugging stdout
+    print("CLI Stderr:\n", result.stderr) # For debugging stderr
+    if result.exception: print("Exception:\n", result.exception)
 
     assert result.exit_code == 0
     assert "Successfully scaled features" in result.output
@@ -138,7 +149,7 @@ def test_features_transform_scale_npz_success(runner: CliRunner, sample_features
 
 def test_features_transform_scale_invalid_input(runner: CliRunner, tmp_path: Path, mocker):
     """Test scaling with input that cannot be read as features."""
-    # Mock read_data to return audio tuple
+    # Mock read_data where it's called in the CLI module
     mock_read = mocker.patch("sygnals.cli.features_cmd.read_data", return_value=(np.zeros(100), 16000))
     input_file = tmp_path / "input.wav" # Use WAV extension
     input_file.touch()
@@ -152,7 +163,8 @@ def test_features_transform_scale_invalid_input(runner: CliRunner, tmp_path: Pat
     result = runner.invoke(cli, args)
 
     assert result.exit_code != 0
-    assert "Input file" in result.output and "not suitable for feature scaling" in result.output
+    # Check stderr for the error message
+    assert "Input file" in result.stderr and "not suitable for feature scaling" in result.stderr
 
 
 def test_features_transform_scale_no_numeric(runner: CliRunner, tmp_path: Path, mocker):
@@ -162,6 +174,9 @@ def test_features_transform_scale_no_numeric(runner: CliRunner, tmp_path: Path, 
     df.to_csv(input_file, index=False)
     output_file = tmp_path / "output.csv"
 
+    # Mock read_data where it's called in the CLI module
+    mocker.patch("sygnals.cli.features_cmd.read_data", return_value=df)
+
     args = [
         "features", "transform", "scale", str(input_file),
         "--output", str(output_file),
@@ -170,7 +185,8 @@ def test_features_transform_scale_no_numeric(runner: CliRunner, tmp_path: Path, 
     result = runner.invoke(cli, args)
 
     assert result.exit_code != 0
-    assert "No valid numeric feature data found" in result.output
+    # Check stderr for the error message
+    assert "No valid numeric feature data found" in result.stderr
 
 
 def test_features_transform_scale_missing_sklearn(runner: CliRunner, sample_features_csv: Path, mocker):
@@ -191,7 +207,8 @@ def test_features_transform_scale_missing_sklearn(runner: CliRunner, sample_feat
     result = runner.invoke(cli, args)
 
     assert result.exit_code != 0
-    assert "Missing dependency for scaling" in result.output
-    assert "scikit-learn" in result.output
+    # Check stderr for the error message
+    assert "Missing dependency for scaling" in result.stderr
+    assert "scikit-learn" in result.stderr
 
 # TODO: Add tests for 'features extract' when implemented.
