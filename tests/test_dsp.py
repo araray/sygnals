@@ -5,23 +5,28 @@ import numpy as np
 from numpy.testing import assert_allclose, assert_array_equal
 import librosa # For generating test signals and comparing results
 
+# Import necessary functions from sygnals.core.audio.features for test_amplitude_envelope_rms
+# Use absolute import path
+from sygnals.core.audio.features import rms_energy
+
 # Functions to test
 from sygnals.core.dsp import (
     compute_fft, compute_ifft, apply_convolution, apply_window,
     compute_stft, compute_cqt, compute_correlation, compute_autocorrelation,
-    compute_psd_periodogram, compute_psd_welch, amplitude_envelope
+    compute_psd_periodogram, compute_psd_welch, amplitude_envelope, hilbert_transform # Added hilbert_transform
 )
+
 
 # --- Test Fixtures ---
 @pytest.fixture
 def sine_wave():
-    """Generate a simple sine wave test signal."""
+    """Generate a simple sine wave test signal with amplitude 1.0."""
     fs = 1000.0
     duration = 1.0
     freq = 50.0
     t = np.arange(0, duration, 1/fs)
     # Ensure data is float64
-    x = np.sin(2 * np.pi * freq * t).astype(np.float64)
+    x = np.sin(2 * np.pi * freq * t).astype(np.float64) # Amplitude is 1.0
     return x, fs, freq
 
 @pytest.fixture
@@ -32,8 +37,8 @@ def chirp_signal():
     f0 = 100.0 # Start frequency
     f1 = 1000.0 # End frequency
     t = np.arange(0, duration, 1/fs)
-    # Use fmin instead of f0 for newer librosa versions
-    x = librosa.chirp(fmin=f0, f1=f1, sr=fs, duration=duration).astype(np.float64)
+    # Use fmin instead of f0 and fmax instead of f1 for newer librosa versions
+    x = librosa.chirp(fmin=f0, fmax=f1, sr=fs, duration=duration).astype(np.float64)
     return x, fs
 
 @pytest.fixture
@@ -185,7 +190,8 @@ def test_amplitude_envelope_rms(sine_wave):
     assert envelope.dtype == np.float64
     # Check length corresponds to number of frames
     # Use librosa's frame calculation for consistency (center=True is default in rms_energy)
-    num_frames = len(librosa.util.frame(x, frame_length=frame_length, hop_length=hop_length, center=True)[0])
+    # Calculate number of frames consistent with librosa centered features
+    num_frames = 1 + int(np.floor(len(x) / hop_length))
     assert len(envelope) == num_frames
     # RMS envelope of sine wave A*sin(wt) should be approx A/sqrt(2)
     expected_rms = 1.0 / np.sqrt(2)
