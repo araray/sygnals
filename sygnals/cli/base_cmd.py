@@ -1,89 +1,110 @@
 # sygnals/cli/base_cmd.py
 
 """
-Base setup for CLI commands, including configuration loading and logging initialization.
+Base setup for CLI commands, including configuration loading, logging initialization,
+and plugin system initialization.
 """
 
 import logging
 import click
 import sys
+from typing import Optional # Import Optional
 
 from sygnals.config import load_configuration, SygnalsConfig
 from sygnals.utils.logging_config import setup_logging
+# Import plugin components
+from sygnals.plugins.api import PluginRegistry
+from sygnals.plugins.loader import PluginLoader
 
 logger = logging.getLogger(__name__)
 
-# Rename to ConfigGroup and inherit from click.Group
+# --- Global Plugin Instances ---
+# Instantiate registry here, loader will be created in invoke
+# These need to be accessible by the main_cli module for teardown registration
+plugin_registry = PluginRegistry()
+plugin_loader: Optional[PluginLoader] = None # Initialize later
+
+
 class ConfigGroup(click.Group):
     """
-    A custom Click Group that loads configuration and sets up logging
-    before invoking the group or its subcommands.
-    Passes the config object via the context.
+    A custom Click Group that loads configuration, sets up logging,
+    and initializes the plugin system before invoking the group or its subcommands.
+    Passes config, loader, and registry via the context object (ctx.obj).
     """
     def invoke(self, ctx: click.Context):
         """
-        Overrides the default invoke method to set up config and logging first.
+        Overrides the default invoke method to set up config, logging, and plugins.
         """
-        # Ensure ctx.obj is initialized if not already done (e.g., by parent group)
+        # Ensure ctx.obj is initialized as a dictionary
         if ctx.obj is None:
-             ctx.obj = {} # Initialize as dict, can store config here
+             ctx.obj = {}
 
-        # 1. Load Configuration
-        # Check if config is already loaded (e.g., if nested groups use this)
-        if not isinstance(ctx.obj, SygnalsConfig):
-            config = load_configuration()
-            ctx.obj = config # Store config in context object
-            config_loaded_here = True
-        else:
-            config = ctx.obj # Config already loaded by a parent group
-            config_loaded_here = False
-            logger.debug("Configuration already loaded in context.")
+        config_loaded_here = False
+        plugins_loaded_here = False
 
-
-        # 2. Setup Logging based on verbosity options from context
-        # Only set up logging if this group instance loaded the config
-        # to avoid redundant setup in nested groups.
-        if config_loaded_here:
-            verbosity = 0
-            # Check params on the current context first
-            if ctx.params.get('verbose', 0) > 0:
-                verbosity = ctx.params['verbose']
-            if ctx.params.get('quiet', False):
-                verbosity = -1
-            # If not found, check parent context (might be needed if options are on top-level group)
-            elif ctx.parent and ctx.parent.params.get('verbose', 0) > 0:
-                 verbosity = ctx.parent.params['verbose']
-            elif ctx.parent and ctx.parent.params.get('quiet', False):
-                 verbosity = -1
-
-
-            try:
-                setup_logging(config, verbosity)
-                logger.debug("Config and logging setup complete in ConfigGroup.")
-            except Exception as e:
-                # Use basic print for critical errors during setup
-                print(f"CRITICAL ERROR during logging setup: {e}", file=sys.stderr)
-                # Optionally re-raise or exit
-                # raise # Or sys.exit(1)
-        else:
-             logger.debug("Skipping logging setup; already done by parent group.")
-
-        # 3. Proceed with the actual group/command invocation
         try:
-            # Call the superclass's invoke method to handle command dispatching
+            # 1. Load Configuration
+            # Check if config is already loaded (e.g., if nested groups use this)
+            if 'config' not in ctx.obj:
+                config = load_configuration()
+                ctx.obj['config'] = config # Store config in context dict
+                config_loaded_here = True
+            else:
+                config: SygnalsConfig = ctx.obj['config'] # Config already loaded
+                logger.debug("Configuration already loaded in context.")
+
+            # 2. Setup Logging based on config and verbosity options
+            # Only set up logging if this group instance loaded the config
+            if config_loaded_here:
+                verbosity = 0
+                # Check params on the current context first
+                if ctx.params.get('verbose', 0) > 0:
+                    verbosity = ctx.params['verbose']
+                if ctx.params.get('quiet', False):
+                    verbosity = -1
+                # If not found, check parent context
+                elif ctx.parent and ctx.parent.params.get('verbose', 0) > 0:
+                     verbosity = ctx.parent.params['verbose']
+                elif ctx.parent and ctx.parent.params.get('quiet', False):
+                     verbosity = -1
+
+                setup_logging(config, verbosity)
+                logger.debug("Logging setup complete in ConfigGroup.")
+            else:
+                 logger.debug("Skipping logging setup; already done by parent group.")
+
+            # 3. Initialize and Run Plugin Loader
+            # Check if plugins are already loaded
+            global plugin_loader, plugin_registry # Use global instances
+            if 'plugin_loader' not in ctx.obj:
+                logger.debug("Initializing Plugin System...")
+                plugin_loader = PluginLoader(config, plugin_registry)
+                plugin_loader.discover_and_load() # Discover and load plugins
+                ctx.obj['plugin_loader'] = plugin_loader
+                ctx.obj['plugin_registry'] = plugin_registry # Add registry too
+                plugins_loaded_here = True
+                logger.debug("Plugin system initialized and loaded.")
+            else:
+                # Retrieve existing loader/registry if nested call
+                plugin_loader = ctx.obj['plugin_loader']
+                plugin_registry = ctx.obj['plugin_registry']
+                logger.debug("Plugin system already initialized in context.")
+
+            # 4. Proceed with the actual group/command invocation
             return super().invoke(ctx)
+
         except Exception as e:
-            # Log unhandled exceptions before exiting
-            # Use the logger potentially configured above
-            exc_logger = logging.getLogger("sygnals.cli.error")
-            exc_logger.critical(f"Unhandled exception during command execution: {e}", exc_info=True)
-            # Optionally re-raise or exit with error code
-            sys.exit(1) # Exit with non-zero code on error
+            # Log critical errors during setup
+            setup_logger = logging.getLogger("sygnals.setup.error")
+            setup_logger.critical(f"Critical error during CLI setup (config/log/plugin): {e}", exc_info=True)
+            # Use basic print as fallback if logging failed
+            print(f"CRITICAL SETUP ERROR: {e}", file=sys.stderr)
+            # Exit cleanly on setup error
+            ctx.exit(1)
 
 
 # --- Common CLI Options ---
-
-# Verbosity options (applied to the main group)
+# (Keep verbose_option and quiet_option as defined before)
 verbose_option = click.option(
     '-v', '--verbose',
     count=True,
@@ -95,11 +116,3 @@ quiet_option = click.option(
     default=False,
     help="Suppress all console output except critical errors."
 )
-
-# Configuration override options (can be added later)
-# config_file_option = click.option(
-#     '-c', '--config-file',
-#     type=click.Path(exists=True, dir_okay=False, resolve_path=True),
-#     multiple=True, # Allow multiple config files
-#     help="Path to a Sygnals TOML configuration file (overrides defaults)."
-# )
