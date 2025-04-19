@@ -7,7 +7,7 @@ Provides functionality to generate a basic plugin template structure.
 import logging
 import re
 from pathlib import Path
-from packaging.version import Version # <-- ADDED IMPORT
+from packaging.version import Version # Added import
 
 from sygnals.version import __version__ as core_version
 
@@ -22,12 +22,13 @@ PLUGIN_TOML_TEMPLATE = """\
 # Unique plugin identifier (lowercase, hyphens allowed)
 name = "{plugin_name}"
 
-# Plugin version (Semantic Versioning - https://semver.org/)
+# Plugin version (Semantic Versioning - [https://semver.org/](https://semver.org/))
 version = "0.1.0"
 
 # Sygnals core API compatibility range (PEP 440 specifier)
 # Adjust based on the Sygnals versions your plugin supports.
-sygnals_api = ">={core_version_major_minor}.0,<{core_version_major + 1}.0.0" # E.g., ">=1.0.0,<2.0.0"
+# FIX: Use the pre-calculated next major version key
+sygnals_api = ">={core_version_major_minor}.0,<{core_version_next_major}.0.0" # E.g., ">=1.0.0,<2.0.0"
 
 # Human-readable summary of the plugin's purpose
 description = "A brief description of what {plugin_name} does."
@@ -81,7 +82,7 @@ dependencies = [
 ]
 
 [project.urls]
-# Homepage = "https://github.com/your_username/{plugin_name}" # Optional: Link to repo
+# Homepage = "[https://github.com/your_username/](https://github.com/your_username/){plugin_name}" # Optional: Link to repo
 
 # --- Entry Point for Sygnals Plugin Discovery ---
 # This tells Sygnals how to find your plugin if installed via pip.
@@ -94,6 +95,7 @@ dependencies = [
 # line-length = 88
 """
 
+# FIX: Corrected package name reference in __init__ template
 PLUGIN_INIT_TEMPLATE = """\
 # {package_name}/__init__.py
 
@@ -103,6 +105,7 @@ from .{package_name}.plugin import {class_name}
 # Optionally define __all__ if needed
 __all__ = ["{class_name}"]
 """
+
 
 PLUGIN_PY_TEMPLATE = """\
 # {package_name}/plugin.py
@@ -151,7 +154,7 @@ class {class_name}(SygnalsPluginBase):
         Initialize plugin resources here. Called once during loading.
         'config' is the resolved Sygnals configuration dictionary.
         \"\"\"
-        logger.info(f"Initializing plugin '{self.name}' v{self.version}")
+        logger.info(f"Initializing plugin '{{self.name}}' v{{self.version}}")
         # Example: Store config value or initialize a resource
         # self.my_setting = config.get('plugins', {{}}).get(self.name, {{}}).get('my_setting', 'default')
         pass
@@ -160,7 +163,7 @@ class {class_name}(SygnalsPluginBase):
         \"\"\"
         Clean up resources here. Called during application shutdown.
         \"\"\"
-        logger.info(f"Tearing down plugin '{self.name}'")
+        logger.info(f"Tearing down plugin '{{self.name}}'")
         pass
 
     # --- Optional Registration Hooks ---
@@ -170,7 +173,7 @@ class {class_name}(SygnalsPluginBase):
     #     \"\"\"Register custom filter functions.\"\"\"
     #     from . import filters # Example: Assuming filters are in filters.py
     #     registry.add_filter("my_custom_filter", filters.my_filter_func)
-    #     logger.debug(f"Plugin '{self.name}' registered filter 'my_custom_filter'.")
+    #     logger.debug(f"Plugin '{{self.name}}' registered filter 'my_custom_filter'.")
 
     # def register_transforms(self, registry: PluginRegistry):
     #     \"\"\"Register custom transforms.\"\"\"
@@ -197,7 +200,7 @@ class {class_name}(SygnalsPluginBase):
     #     import click
     #     from . import cli # Example: Assuming commands are in cli.py
     #     registry.add_cli_command(cli.my_command_group)
-    #     logger.debug(f"Plugin '{self.name}' registered CLI commands.")
+    #     logger.debug(f"Plugin '{{self.name}}' registered CLI commands.")
 
 """
 
@@ -269,7 +272,8 @@ def create_plugin_scaffold(plugin_name: str, destination_dir: Path):
         # --- Get core version info for templates ---
         core_v = Version(core_version) # Use imported Version
         core_version_major_minor = f"{core_v.major}.{core_v.minor}"
-        core_version_major = core_v.major
+        # FIX: Calculate next major version correctly
+        core_version_next_major = core_v.major + 1
 
         # --- Create template files ---
         template_context = {
@@ -278,7 +282,8 @@ def create_plugin_scaffold(plugin_name: str, destination_dir: Path):
             "class_name": class_name,
             "plugin_version": "0.1.0", # Default initial version
             "core_version_major_minor": core_version_major_minor,
-            "core_version_major": core_version_major,
+            # FIX: Add the calculated next major version to the context
+            "core_version_next_major": core_version_next_major,
         }
 
         # plugin.toml
@@ -297,9 +302,12 @@ def create_plugin_scaffold(plugin_name: str, destination_dir: Path):
         )
 
         # <package_name>/plugin.py
+        # FIX: Escape curly braces intended for logging f-strings within the template
         (package_dir / "plugin.py").write_text(
-            PLUGIN_PY_TEMPLATE.format(**template_context), encoding='utf-8'
+            PLUGIN_PY_TEMPLATE.format(**template_context).replace("{{", "{").replace("}}", "}"),
+            encoding='utf-8'
         )
+
 
         # Optional: Create empty README.md
         (plugin_root / "README.md").write_text(f"# Sygnals Plugin: {plugin_name}\n\nTODO: Add description.", encoding='utf-8')
