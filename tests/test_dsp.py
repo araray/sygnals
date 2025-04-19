@@ -13,9 +13,9 @@ from sygnals.core.audio.features import rms_energy
 from sygnals.core.dsp import (
     compute_fft, compute_ifft, apply_convolution, apply_window,
     compute_stft, compute_cqt, compute_correlation, compute_autocorrelation,
-    compute_psd_periodogram, compute_psd_welch, amplitude_envelope, hilbert_transform # Added hilbert_transform
+    compute_psd_periodogram, compute_psd_welch, amplitude_envelope
 )
-
+from sygnals.core.transforms import hilbert_transform
 
 # --- Test Fixtures ---
 @pytest.fixture
