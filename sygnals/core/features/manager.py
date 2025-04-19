@@ -13,7 +13,7 @@ import pandas as pd
 import librosa # Needed for framing, time/frequency utils, and some features
 from numpy.typing import NDArray
 # Import necessary types
-from typing import List, Dict, Any, Optional, Tuple, Union, Callable, Set
+from typing import List, Dict, Any, Optional, Tuple, Union, Callable, Set, Literal
 
 # Import feature dictionaries and specific functions needed for dispatch
 from .time_domain import TIME_DOMAIN_FEATURES
