@@ -21,10 +21,11 @@ from sygnals.plugins.loader import PluginLoader # Import loader
 # Import command groups/functions
 from .plugin_cmd import plugin_cmd
 from .segment_cmd import segment_cmd
-from .augment_cmd import augment_cmd # Import the new augment command group
-# from .save_cmd import save_cmd # Will be added later
-# from .features_cmd import features_cmd # Will be added later
+from .augment_cmd import augment_cmd
+from .features_cmd import features_cmd # Import features command group
+from .save_cmd import save_cmd       # Import save command group
 
+# Import other existing/planned commands
 # from .analyze_cmd import analyze
 # from .transform_cmd import transform
 # from .filter_cmd import filter_cmd
@@ -103,16 +104,14 @@ def hello(ctx):
          click.echo("Error: Context not loaded correctly.", err=True)
          ctx.exit(1)
 
-# Add the new plugin command group
+# Add command groups in logical order
 main_cli.add_command(plugin_cmd)
-# Add the new segment command group
 main_cli.add_command(segment_cmd)
-# Add the new augment command group
+main_cli.add_command(features_cmd) # Add features group
 main_cli.add_command(augment_cmd)
+main_cli.add_command(save_cmd)    # Add save group
 
 # Add other commands/groups as they are refactored or created
-# main_cli.add_command(features_cmd)
-# main_cli.add_command(save_cmd)
 # main_cli.add_command(analyze)
 # main_cli.add_command(transform)
 # main_cli.add_command(filter_cmd, name="filter")
