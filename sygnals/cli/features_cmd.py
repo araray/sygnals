@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional, List, Tuple, Any, Dict
 
 # Import core components
-from sygnals.core.data_handler import read_data, save_data, ReadResult
+from sygnals.core.data_handler import read_data, save_data, ReadResult, NDArray # Added NDArray import
 from sygnals.core.features.manager import extract_features # For 'extract' subcommand later
 from sygnals.core.ml_utils.scaling import apply_scaling # For 'transform scale'
 from sygnals.config.models import SygnalsConfig # For accessing config if needed
@@ -145,6 +145,7 @@ def transform_scale(ctx, input_file: str, output: str, scaler: str):
         feature_matrix: Optional[NDArray[np.float64]] = None
         original_columns: Optional[List[str]] = None
         time_index: Optional[pd.Index] = None # Store time index if reading DataFrame
+        data_key: Optional[str] = None # Store key used for NPZ data
 
         if isinstance(data_result, pd.DataFrame):
              # Assume columns are features, potentially excluding a 'time' column
@@ -158,8 +159,11 @@ def transform_scale(ctx, input_file: str, output: str, scaler: str):
                   feature_df = data_result
              # Convert to NumPy array, ensuring numeric types
              try:
-                 feature_matrix = feature_df.select_dtypes(include=np.number).values.astype(np.float64)
-                 original_columns = feature_df.select_dtypes(include=np.number).columns.tolist()
+                 numeric_df = feature_df.select_dtypes(include=np.number)
+                 if numeric_df.empty:
+                      raise ValueError("No numeric columns found in the input CSV file for scaling.")
+                 feature_matrix = numeric_df.values.astype(np.float64)
+                 original_columns = numeric_df.columns.tolist()
              except Exception as e:
                  raise ValueError(f"Could not convert DataFrame columns to numeric features: {e}")
 
@@ -169,31 +173,39 @@ def transform_scale(ctx, input_file: str, output: str, scaler: str):
              potential_keys = ['features', 'data'] + list(data_result.keys())
              data_key = None
              for key in potential_keys:
-                 if isinstance(data_result.get(key), np.ndarray) and data_result[key].ndim >= 1:
+                 # Ensure the value is a NumPy array and is numeric
+                 value = data_result.get(key)
+                 if isinstance(value, np.ndarray) and np.issubdtype(value.dtype, np.number):
                      data_key = key
                      break
              if data_key:
                  feature_matrix = data_result[data_key].astype(np.float64)
-                 original_columns = [f"feature_{i}" for i in range(feature_matrix.shape[1])] if feature_matrix.ndim == 2 else ['feature_0']
-                 logger.info(f"Using array under key '{data_key}' from NPZ file for scaling.")
                  # Handle potential 1D array from NPZ
                  if feature_matrix.ndim == 1:
                       feature_matrix = feature_matrix.reshape(-1, 1)
+                 elif feature_matrix.ndim != 2:
+                      raise ValueError(f"Feature array '{data_key}' in NPZ must be 1D or 2D, got shape {feature_matrix.shape}")
+                 original_columns = [f"feature_{i}" for i in range(feature_matrix.shape[1])]
+                 logger.info(f"Using array under key '{data_key}' from NPZ file for scaling.")
              else:
-                 raise ValueError("Could not find a suitable NumPy array in the input NPZ file.")
+                 raise ValueError("Could not find a suitable numeric NumPy array in the input NPZ file.")
         else:
             raise click.UsageError(f"Input file '{input_path.name}' format not suitable for feature scaling (expected CSV or NPZ with features).")
 
         if feature_matrix is None or feature_matrix.size == 0:
+             # This condition might be redundant due to checks above, but keep for safety
              raise ValueError("No valid numeric feature data found in the input file.")
-        if feature_matrix.ndim != 2:
-             raise ValueError(f"Feature matrix must be 2D (samples/frames x features), got shape {feature_matrix.shape}")
+        # Redundant check as shape is handled above
+        # if feature_matrix.ndim != 2:
+        #      raise ValueError(f"Feature matrix must be 2D (samples/frames x features), got shape {feature_matrix.shape}")
 
         # 2. Apply Scaling
         # TODO: Add way to pass scaler_params from CLI
+        # FIX: Explicitly pass fit=True
         scaled_features, fitted_scaler = apply_scaling(
             features=feature_matrix,
-            scaler_type=scaler # type: ignore
+            scaler_type=scaler, # type: ignore
+            fit=True # Explicitly fit the scaler
         )
         # TODO: Optionally save the fitted scaler instance?
 
@@ -210,11 +222,11 @@ def transform_scale(ctx, input_file: str, output: str, scaler: str):
             save_data(scaled_df, output_path)
         elif output_ext == '.npz':
              # Save as NPZ, potentially preserving other arrays from input dict
-             if isinstance(data_result, dict):
+             if isinstance(data_result, dict) and data_key is not None:
                  output_dict = data_result.copy() # Start with original dict
                  output_dict[data_key] = scaled_features # Overwrite with scaled data
                  save_data(output_dict, output_path)
-             else: # Original was DataFrame, save only scaled features
+             else: # Original was DataFrame or couldn't identify original dict structure
                  save_data({'scaled_features': scaled_features}, output_path)
         else:
              # Attempt saving as CSV by default if format unknown
@@ -233,6 +245,7 @@ def transform_scale(ctx, input_file: str, output: str, scaler: str):
     except FileNotFoundError:
         raise click.UsageError(f"Input file not found: {input_path}")
     except ValueError as e:
+        # Catch value errors from reading/processing
         raise click.UsageError(f"Error during feature scaling: {e}")
     except ImportError as e:
          # Catch missing scikit-learn
