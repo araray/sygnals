@@ -188,8 +188,8 @@ def test_hnr_placeholder(sine_wave_audio):
     assert hnr_result.dtype == np.float64
     # Check that all values are NaN
     assert np.all(np.isnan(hnr_result))
-    # Check length matches expected number of frames
-    expected_num_frames = len(librosa.util.frame(signal, frame_length=frame_length, hop_length=hop_length, center=True)[0])
+    # Check length matches expected number of frames for centered analysis
+    expected_num_frames = 1 + int(np.floor(len(signal) / hop_length))
     assert len(hnr_result) == expected_num_frames
 
 
@@ -204,8 +204,8 @@ def test_jitter_placeholder(sine_wave_audio):
     assert jitter_result.dtype == np.float64
     # Check that all values are NaN
     assert np.all(np.isnan(jitter_result))
-    # Check length matches expected number of frames
-    expected_num_frames = len(librosa.util.frame(signal, frame_length=frame_length, hop_length=hop_length, center=True)[0])
+    # Check length matches expected number of frames for centered analysis
+    expected_num_frames = 1 + int(np.floor(len(signal) / hop_length))
     assert len(jitter_result) == expected_num_frames
 
 
@@ -220,8 +220,8 @@ def test_shimmer_placeholder(sine_wave_audio):
     assert shimmer_result.dtype == np.float64
     # Check that all values are NaN
     assert np.all(np.isnan(shimmer_result))
-    # Check length matches expected number of frames
-    expected_num_frames = len(librosa.util.frame(signal, frame_length=frame_length, hop_length=hop_length, center=True)[0])
+    # Check length matches expected number of frames for centered analysis
+    expected_num_frames = 1 + int(np.floor(len(signal) / hop_length))
     assert len(shimmer_result) == expected_num_frames
 
 
