@@ -188,19 +188,23 @@ def test_augment_cmd_invalid_input_type(runner: CliRunner, tmp_path: Path, mocke
 
     # Try add-noise
     args_noise = ["augment", "add-noise", str(input_file), "-o", str(output_file), "--snr", "10"]
-    result_noise = runner.invoke(cli, args_noise)
+    result_noise = runner.invoke(cli, args_noise, catch_exceptions=False) # Catch exceptions to check exc_info
     assert result_noise.exit_code != 0
-    # FIX: Check exception message instead of stderr
-    assert result_noise.exception is not None
-    assert "Input file" in str(result_noise.exception) and "not recognized as audio" in str(result_noise.exception)
+    # FIX: Check the original exception type and message using exc_info
+    assert result_noise.exc_info is not None
+    exc_type, exc_value, _ = result_noise.exc_info
+    assert issubclass(exc_type, click.exceptions.Abort) # Check if it aborted
+    assert "Input file" in str(exc_value) and "not recognized as audio" in str(exc_value)
 
     # Try pitch-shift
     args_pitch = ["augment", "pitch-shift", str(input_file), "-o", str(output_file), "--steps", "1"]
-    result_pitch = runner.invoke(cli, args_pitch)
+    result_pitch = runner.invoke(cli, args_pitch, catch_exceptions=False) # Catch exceptions
     assert result_pitch.exit_code != 0
-    # FIX: Check exception message instead of stderr
-    assert result_pitch.exception is not None
-    assert "Input file" in str(result_pitch.exception) and "not recognized as audio" in str(result_pitch.exception)
+    # FIX: Check the original exception type and message using exc_info
+    assert result_pitch.exc_info is not None
+    exc_type_p, exc_value_p, _ = result_pitch.exc_info
+    assert issubclass(exc_type_p, click.exceptions.Abort) # Check if it aborted
+    assert "Input file" in str(exc_value_p) and "not recognized as audio" in str(exc_value_p)
 
 
 def test_augment_cmd_missing_option(runner: CliRunner, tmp_path: Path):
@@ -211,24 +215,30 @@ def test_augment_cmd_missing_option(runner: CliRunner, tmp_path: Path):
 
     # Missing --snr for add-noise
     args_noise = ["augment", "add-noise", str(input_file), "-o", str(output_file)]
-    result_noise = runner.invoke(cli, args_noise)
+    result_noise = runner.invoke(cli, args_noise, catch_exceptions=False) # Catch exceptions
     assert result_noise.exit_code != 0
-    # FIX: Check exception type and parameter hint
-    assert isinstance(result_noise.exception, click.exceptions.MissingParameter)
-    assert result_noise.exception.param_hint == 'snr'
+    # FIX: Check the original exception type and parameter hint using exc_info
+    assert result_noise.exc_info is not None
+    exc_type_n, exc_value_n, _ = result_noise.exc_info
+    assert issubclass(exc_type_n, click.exceptions.MissingParameter)
+    assert exc_value_n.param_hint == 'snr'
 
     # Missing --steps for pitch-shift
     args_pitch = ["augment", "pitch-shift", str(input_file), "-o", str(output_file)]
-    result_pitch = runner.invoke(cli, args_pitch)
+    result_pitch = runner.invoke(cli, args_pitch, catch_exceptions=False) # Catch exceptions
     assert result_pitch.exit_code != 0
-    # FIX: Check exception type and parameter hint
-    assert isinstance(result_pitch.exception, click.exceptions.MissingParameter)
-    assert result_pitch.exception.param_hint == 'steps'
+    # FIX: Check the original exception type and parameter hint using exc_info
+    assert result_pitch.exc_info is not None
+    exc_type_p, exc_value_p, _ = result_pitch.exc_info
+    assert issubclass(exc_type_p, click.exceptions.MissingParameter)
+    assert exc_value_p.param_hint == 'steps'
 
     # Missing --rate for time-stretch
     args_stretch = ["augment", "time-stretch", str(input_file), "-o", str(output_file)]
-    result_stretch = runner.invoke(cli, args_stretch)
+    result_stretch = runner.invoke(cli, args_stretch, catch_exceptions=False) # Catch exceptions
     assert result_stretch.exit_code != 0
-    # FIX: Check exception type and parameter hint
-    assert isinstance(result_stretch.exception, click.exceptions.MissingParameter)
-    assert result_stretch.exception.param_hint == 'rate'
+    # FIX: Check the original exception type and parameter hint using exc_info
+    assert result_stretch.exc_info is not None
+    exc_type_s, exc_value_s, _ = result_stretch.exc_info
+    assert issubclass(exc_type_s, click.exceptions.MissingParameter)
+    assert exc_value_s.param_hint == 'rate'
