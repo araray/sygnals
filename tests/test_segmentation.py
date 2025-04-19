@@ -7,6 +7,7 @@ Tests for signal segmentation functions in sygnals.core.segmentation.
 import pytest
 import numpy as np
 from numpy.testing import assert_allclose, assert_equal, assert_array_equal
+from typing import Optional, Union, Literal, Dict, Any, Tuple
 
 # Import segmentation functions to test
 from sygnals.core.segmentation import (
