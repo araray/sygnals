@@ -147,16 +147,18 @@ def test_segment_fixed_length_cmd_invalid_input(runner: CliRunner, tmp_path: Pat
         "--length", "1.0",
     ]
 
-    result = runner.invoke(cli, args)
+    result = runner.invoke(cli, args, catch_exceptions=False) # Catch exceptions
 
     print("CLI Output:\n", result.output) # For debugging stdout
     print("CLI Stderr:\n", result.stderr) # For debugging stderr
     if result.exception: print("Exception:\n", result.exception)
 
     assert result.exit_code != 0
-    # FIX: Check exception message instead of stderr
-    assert result.exception is not None
-    assert "Input file" in str(result.exception) and "not recognized as audio" in str(result.exception)
+    # FIX: Check the original exception type and message using exc_info
+    assert result.exc_info is not None
+    exc_type, exc_value, _ = result.exc_info
+    assert issubclass(exc_type, click.exceptions.Abort) # Abort wraps UsageError
+    assert "Input file" in str(exc_value) and "not recognized as audio" in str(exc_value)
     mock_read.assert_called_once()
 
 
@@ -168,11 +170,13 @@ def test_segment_fixed_length_cmd_missing_output(runner: CliRunner, tmp_path: Pa
         "segment", "fixed-length", str(input_file),
         "--length", "1.0",
     ]
-    result = runner.invoke(cli, args)
+    result = runner.invoke(cli, args, catch_exceptions=False) # Catch exceptions
     assert result.exit_code != 0
-    # FIX: Check exception type and parameter hint
-    assert isinstance(result.exception, click.exceptions.MissingParameter)
-    assert result.exception.param_hint == 'output'
+    # FIX: Check the original exception type and parameter hint using exc_info
+    assert result.exc_info is not None
+    exc_type, exc_value, _ = result.exc_info
+    assert issubclass(exc_type, click.exceptions.MissingParameter)
+    assert exc_value.param_hint == 'output'
 
 
 def test_segment_fixed_length_cmd_zero_segments(runner: CliRunner, mock_audio_read, tmp_path: Path, mocker):
