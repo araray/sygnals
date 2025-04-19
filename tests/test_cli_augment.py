@@ -1,137 +1,198 @@
-# tests/test_augment.py
+# tests/test_cli_augment.py
 
 """
-Tests for data augmentation functions in sygnals.core.augment.
+Tests for the 'sygnals augment' CLI command group.
 """
 
 import pytest
 import numpy as np
-from numpy.testing import assert_allclose, assert_equal, assert_array_less
-import warnings # To check for placeholder warnings
+from pathlib import Path
+from click.testing import CliRunner
 
-# Import augmentation functions to test
-from sygnals.core.augment import (
-    add_noise,
-    pitch_shift,
-    time_stretch,
-)
+# Import the main CLI entry point and the command group/functions to test/mock
+from sygnals.cli.main import cli
+from sygnals.core import augment # To mock functions inside
 
 # --- Test Fixtures ---
 
 @pytest.fixture
-def sample_audio_mono():
-    """Generate a simple mono audio signal."""
-    sr = 22050
-    duration = 1.0
-    freq = 440.0
-    t = np.linspace(0, duration, int(sr * duration), endpoint=False)
-    signal = (0.7 * np.sin(2 * np.pi * freq * t)).astype(np.float64)
-    return signal, sr
+def runner() -> CliRunner:
+    """Provides a Click CliRunner instance."""
+    return CliRunner()
+
+@pytest.fixture
+def mock_audio_read_save(mocker):
+    """Mocks read_data and save_data."""
+    sr = 16000
+    dummy_audio = np.random.randn(sr * 3).astype(np.float64) # 3 seconds
+    mock_read = mocker.patch("sygnals.cli.augment_cmd.read_data", return_value=(dummy_audio, sr))
+    mock_save = mocker.patch("sygnals.cli.augment_cmd.save_data")
+    return mock_read, mock_save, dummy_audio, sr
 
 # --- Test Cases ---
 
-def test_add_noise(sample_audio_mono):
-    """Test the add_noise augmentation function."""
-    signal, sr = sample_audio_mono
-    signal_power = np.mean(signal**2)
+# Test 'augment add-noise'
+def test_augment_add_noise_cmd(runner: CliRunner, mock_audio_read_save, tmp_path: Path, mocker):
+    """Test successful execution of 'augment add-noise'."""
+    mock_read, mock_save, dummy_audio, sr = mock_audio_read_save
+    mock_core_noise = mocker.patch.object(augment, 'add_noise', return_value=dummy_audio * 0.5) # Return modified audio
+    input_file = tmp_path / "input.wav"
+    input_file.touch()
+    output_file = tmp_path / "output_noisy.wav"
 
-    # Test adding noise with specific SNR
-    snr_db = 15.0
-    noisy_signal_g = add_noise(signal, snr_db=snr_db, noise_type='gaussian', seed=42)
-    assert noisy_signal_g.dtype == np.float64
-    assert noisy_signal_g.shape == signal.shape
-    # Verify SNR approximately matches target
-    noise_added_g = noisy_signal_g - signal
-    noise_power_g = np.mean(noise_added_g**2)
-    # Handle potential zero signal power case although fixture avoids it
-    actual_snr_db_g = 10 * np.log10(signal_power / noise_power_g) if signal_power > 1e-15 and noise_power_g > 1e-15 else -np.inf
-    assert np.isclose(actual_snr_db_g, snr_db, atol=1.0) # Allow 1 dB tolerance
+    snr = 12.5
+    noise_type = 'gaussian'
+    seed = 42
 
-    # Test reproducibility with seed
-    noisy_signal_g_seed1 = add_noise(signal, snr_db=snr_db, noise_type='gaussian', seed=42)
-    noisy_signal_g_seed2 = add_noise(signal, snr_db=snr_db, noise_type='gaussian', seed=123)
-    assert_allclose(noisy_signal_g, noisy_signal_g_seed1)
-    assert not np.allclose(noisy_signal_g, noisy_signal_g_seed2)
+    args = [
+        "augment", "add-noise", str(input_file),
+        "--output", str(output_file),
+        "--snr", str(snr),
+        "--noise-type", noise_type,
+        "--seed", str(seed)
+    ]
 
-    # Test placeholder noise types (should currently add white noise and warn)
-    with pytest.warns(UserWarning, match="Pink noise generation is currently a placeholder"):
-         noisy_signal_p = add_noise(signal, snr_db=snr_db, noise_type='pink')
-         assert noisy_signal_p.shape == signal.shape # Check basic execution
+    result = runner.invoke(cli, args)
 
-    with pytest.warns(UserWarning, match="Brown noise generation is currently a placeholder"):
-         noisy_signal_b = add_noise(signal, snr_db=snr_db, noise_type='brown')
-         assert noisy_signal_b.shape == signal.shape # Check basic execution
+    print("CLI Output:\n", result.output) # For debugging
+    if result.exception: print("Exception:\n", result.exception)
 
-    # Test invalid noise type
-    with pytest.raises(ValueError, match="Invalid noise_type"):
-        add_noise(signal, snr_db=snr_db, noise_type='invalid')
+    assert result.exit_code == 0, f"CLI exited with code {result.exit_code}"
+    assert "Successfully applied" in result.output and "noise" in result.output
 
-    # Test on silent signal (should return original signal)
-    silent_signal = np.zeros_like(signal)
-    noisy_silent = add_noise(silent_signal, snr_db=snr_db)
-    assert_allclose(noisy_silent, silent_signal, atol=1e-9)
+    mock_read.assert_called_once_with(input_file)
+    mock_core_noise.assert_called_once()
+    call_args, call_kwargs = mock_core_noise.call_args
+    assert_equal(call_kwargs.get('y'), dummy_audio)
+    assert call_kwargs.get('snr_db') == snr
+    assert call_kwargs.get('noise_type') == noise_type
+    assert call_kwargs.get('seed') == seed
 
-
-def test_pitch_shift(sample_audio_mono):
-    """Test the pitch_shift augmentation function."""
-    signal, sr = sample_audio_mono
-
-    # Test shifting up
-    steps_up = 2.5
-    shifted_up = pitch_shift(signal, sr, n_steps=steps_up)
-    assert shifted_up.dtype == np.float64
-    assert shifted_up.shape == signal.shape # Librosa pitch shift preserves length
-
-    # Test shifting down
-    steps_down = -3.0
-    shifted_down = pitch_shift(signal, sr, n_steps=steps_down)
-    assert shifted_down.dtype == np.float64
-    assert shifted_down.shape == signal.shape
-
-    # Test zero shift (should be very close to original)
-    shifted_zero = pitch_shift(signal, sr, n_steps=0.0)
-    assert_allclose(signal, shifted_zero, atol=1e-5) # Allow small tolerance for processing
-
-    # Test invalid input dimension
-    signal_2d = np.stack([signal, signal])
-    with pytest.raises(ValueError, match="Input audio data must be a 1D array"):
-        pitch_shift(signal_2d, sr, n_steps=1.0)
+    mock_save.assert_called_once()
+    save_call_args, save_call_kwargs = mock_save.call_args
+    assert_equal(save_call_args[0][0], dummy_audio * 0.5) # Check augmented data
+    assert save_call_args[0][1] == sr # Check sample rate
+    assert save_call_args[1] == output_file # Check output path
 
 
-def test_time_stretch(sample_audio_mono):
-    """Test the time_stretch augmentation function."""
-    signal, sr = sample_audio_mono
-    original_len = len(signal)
+# Test 'augment pitch-shift'
+def test_augment_pitch_shift_cmd(runner: CliRunner, mock_audio_read_save, tmp_path: Path, mocker):
+    """Test successful execution of 'augment pitch-shift'."""
+    mock_read, mock_save, dummy_audio, sr = mock_audio_read_save
+    mock_core_pitch = mocker.patch.object(augment, 'pitch_shift', return_value=dummy_audio * 0.8)
+    input_file = tmp_path / "input.wav"
+    input_file.touch()
+    output_file = tmp_path / "output_shifted.wav"
 
-    # Test slowing down (rate < 1.0) -> longer signal
-    rate_slow = 0.8
-    stretched_slow = time_stretch(signal, rate=rate_slow)
-    assert stretched_slow.dtype == np.float64
-    expected_len_slow = original_len / rate_slow
-    # Allow tolerance due to framing/algorithm details
-    assert abs(len(stretched_slow) - expected_len_slow) < 0.1 * original_len
+    steps = -2.0
+    bins = 24
 
-    # Test speeding up (rate > 1.0) -> shorter signal
-    rate_fast = 1.25
-    stretched_fast = time_stretch(signal, rate=rate_fast)
-    assert stretched_fast.dtype == np.float64
-    expected_len_fast = original_len / rate_fast
-    assert abs(len(stretched_fast) - expected_len_fast) < 0.1 * original_len
+    args = [
+        "augment", "pitch-shift", str(input_file),
+        "--output", str(output_file),
+        "--steps", str(steps),
+        "--bins-per-octave", str(bins)
+    ]
 
-    # Test rate = 1.0 (should be very close to original)
-    stretched_one = time_stretch(signal, rate=1.0)
-    # Length might still differ slightly due to processing
-    assert abs(len(stretched_one) - original_len) < 10 # Allow small difference
-    # Content should be very similar
-    # assert_allclose(signal, stretched_one[:original_len], atol=1e-4) # Compare overlapping part
+    result = runner.invoke(cli, args)
 
-    # Test invalid rate
-    with pytest.raises(ValueError, match="Time stretch rate must be positive"):
-        time_stretch(signal, rate=0.0)
-    with pytest.raises(ValueError, match="Time stretch rate must be positive"):
-        time_stretch(signal, rate=-0.5)
+    assert result.exit_code == 0
+    assert "Successfully applied pitch shift" in result.output
 
-    # Test invalid input dimension
-    signal_2d = np.stack([signal, signal])
-    with pytest.raises(ValueError, match="Input audio data must be a 1D array"):
-        time_stretch(signal_2d, rate=1.1)
+    mock_read.assert_called_once_with(input_file)
+    mock_core_pitch.assert_called_once()
+    call_args, call_kwargs = mock_core_pitch.call_args
+    assert_equal(call_kwargs.get('y'), dummy_audio)
+    assert call_kwargs.get('sr') == sr
+    assert call_kwargs.get('n_steps') == steps
+    assert call_kwargs.get('bins_per_octave') == bins
+
+    mock_save.assert_called_once()
+    save_call_args, save_call_kwargs = mock_save.call_args
+    assert_equal(save_call_args[0][0], dummy_audio * 0.8) # Check augmented data
+    assert save_call_args[0][1] == sr
+    assert save_call_args[1] == output_file
+
+
+# Test 'augment time-stretch'
+def test_augment_time_stretch_cmd(runner: CliRunner, mock_audio_read_save, tmp_path: Path, mocker):
+    """Test successful execution of 'augment time-stretch'."""
+    mock_read, mock_save, dummy_audio, sr = mock_audio_read_save
+    # Simulate stretching changing the length
+    stretched_audio = np.random.randn(len(dummy_audio) // 2).astype(np.float64)
+    mock_core_stretch = mocker.patch.object(augment, 'time_stretch', return_value=stretched_audio)
+    input_file = tmp_path / "input.wav"
+    input_file.touch()
+    output_file = tmp_path / "output_stretched.wav"
+
+    rate = 1.5 # Speed up
+
+    args = [
+        "augment", "time-stretch", str(input_file),
+        "--output", str(output_file),
+        "--rate", str(rate)
+    ]
+
+    result = runner.invoke(cli, args)
+
+    assert result.exit_code == 0
+    assert "Successfully applied time stretch" in result.output
+
+    mock_read.assert_called_once_with(input_file)
+    mock_core_stretch.assert_called_once()
+    call_args, call_kwargs = mock_core_stretch.call_args
+    assert_equal(call_kwargs.get('y'), dummy_audio)
+    assert call_kwargs.get('rate') == rate
+
+    mock_save.assert_called_once()
+    save_call_args, save_call_kwargs = mock_save.call_args
+    assert_equal(save_call_args[0][0], stretched_audio) # Check augmented data
+    assert save_call_args[0][1] == sr # SR remains the same
+    assert save_call_args[1] == output_file
+
+
+# Test error handling
+def test_augment_cmd_invalid_input_type(runner: CliRunner, tmp_path: Path, mocker):
+    """Test augment commands with non-audio input."""
+    # Mock read_data to return a DataFrame
+    mock_read = mocker.patch("sygnals.cli.augment_cmd.read_data", return_value=pd.DataFrame({'a': [1]}))
+    input_file = tmp_path / "input.csv"
+    input_file.touch()
+    output_file = tmp_path / "output.wav"
+
+    # Try add-noise
+    args_noise = ["augment", "add-noise", str(input_file), "-o", str(output_file), "--snr", "10"]
+    result_noise = runner.invoke(cli, args_noise)
+    assert result_noise.exit_code != 0
+    assert "Input file" in result_noise.output and "not recognized as audio" in result_noise.output
+
+    # Try pitch-shift
+    args_pitch = ["augment", "pitch-shift", str(input_file), "-o", str(output_file), "--steps", "1"]
+    result_pitch = runner.invoke(cli, args_pitch)
+    assert result_pitch.exit_code != 0
+    assert "Input file" in result_pitch.output and "not recognized as audio" in result_pitch.output
+
+
+def test_augment_cmd_missing_option(runner: CliRunner, tmp_path: Path):
+    """Test augment commands with missing required options."""
+    input_file = tmp_path / "input.wav"
+    input_file.touch()
+    output_file = tmp_path / "output.wav"
+
+    # Missing --snr for add-noise
+    args_noise = ["augment", "add-noise", str(input_file), "-o", str(output_file)]
+    result_noise = runner.invoke(cli, args_noise)
+    assert result_noise.exit_code != 0
+    assert "Missing option" in result_noise.output and "--snr" in result_noise.output
+
+    # Missing --steps for pitch-shift
+    args_pitch = ["augment", "pitch-shift", str(input_file), "-o", str(output_file)]
+    result_pitch = runner.invoke(cli, args_pitch)
+    assert result_pitch.exit_code != 0
+    assert "Missing option" in result_pitch.output and "--steps" in result_pitch.output
+
+    # Missing --rate for time-stretch
+    args_stretch = ["augment", "time-stretch", str(input_file), "-o", str(output_file)]
+    result_stretch = runner.invoke(cli, args_stretch)
+    assert result_stretch.exit_code != 0
+    assert "Missing option" in result_stretch.output and "--rate" in result_stretch.output
