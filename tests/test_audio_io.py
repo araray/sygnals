@@ -8,8 +8,10 @@ from numpy.testing import assert_allclose # Import assert_allclose
 
 # Import functions from the new structure
 from sygnals.core.audio.io import load_audio, save_audio
-from sygnals.core.audio.effects import time_stretch, pitch_shift, simple_dynamic_range_compression
-# Removed slice_audio, save_audio_as_csv, save_audio_as_json imports
+# FIX: Import time_stretch and pitch_shift from the correct augment module
+from sygnals.core.augment import time_stretch, pitch_shift
+# Import compression from effects
+from sygnals.core.audio.effects import simple_dynamic_range_compression
 
 # Ensure test data exists (or create it if needed)
 # Assuming test_audio_001.wav exists in tests/data/
@@ -79,6 +81,7 @@ def test_time_stretch():
     sr = 22050
     data = np.ones(sr, dtype=np.float64) # 1 second of ones
     stretch_rate = 2.0 # Speed up
+    # Ensure time_stretch is called correctly (imported from augment)
     stretched = time_stretch(data, rate=stretch_rate)
     assert stretched.dtype == np.float64
     # time_stretch should produce ~ 0.5s of data if rate=2.0
@@ -91,6 +94,7 @@ def test_pitch_shift():
     sr = 22050
     data = np.ones(sr, dtype=np.float64)
     n_steps = 2.0 # Shift up by 2 semitones
+    # Ensure pitch_shift is called correctly (imported from augment)
     shifted = pitch_shift(data, sr, n_steps=n_steps)
     assert shifted.dtype == np.float64
     # pitch shift using librosa's default method shouldn't significantly change length
