@@ -78,9 +78,11 @@ def extract_features(
         sr: Sampling rate (Hz).
         features: List of feature names to extract (e.g., ['rms_energy', 'spectral_centroid', 'mfcc']).
                   Use 'all' to attempt extraction of all known standard features.
-        frame_length: Analysis frame length in samples (default: 2048).
+        frame_length: Analysis frame length in samples (default: 2048). Used for STFT n_fft
+                      and potentially by time-domain features if they require explicit frames.
         hop_length: Hop length between frames in samples (default: 512).
-        center: Whether to pad the signal so frames are centered (default: True).
+        center: Whether to pad the signal so frames are centered (default: True). This is
+                primarily handled by librosa functions like stft, rms, zcr.
         window: Window function to apply for FFT-based features (default: "hann").
         feature_params: Dictionary containing parameters specific to certain features.
                         Keys are feature names, values are dictionaries of parameters.
@@ -99,7 +101,7 @@ def extract_features(
         FeatureExtractionError: If an error occurs during any stage of extraction.
     """
     logger.info(f"Starting feature extraction for features: {features}")
-    logger.debug(f"Parameters: sr={sr}, frame={frame_length}, hop={hop_length}, center={center}, window={window}")
+    logger.debug(f"Parameters: sr={sr}, frame_length(n_fft)={frame_length}, hop={hop_length}, center={center}, window={window}")
     if feature_params:
         logger.debug(f"Feature-specific parameters: {feature_params}")
 
@@ -123,44 +125,36 @@ def extract_features(
     if unknown_features:
         raise ValueError(f"Unknown feature(s) requested: {unknown_features}. Available: {sorted(list(all_known_features))}")
 
-    # --- Framing ---
-    # Use librosa.util.frame for consistency with feature functions that might use it
-    try:
-        # Note: librosa.util.frame doesn't handle centering padding itself.
-        # Centering is handled by librosa.stft and feature functions like rms/zcr.
-        # We frame the original signal here mainly for time-domain features that need raw frames.
-        if center:
-            # Pad signal for centering before framing if needed by time-domain funcs
-            pad_width = frame_length // 2
-            # Pad only if signal length is sufficient, avoid excessive padding on short signals
-            if len(y) > pad_width * 2:
-                 y_padded = np.pad(y, pad_width, mode='constant') # Pad with zeros for framing
-            else:
-                 y_padded = y # Avoid padding if signal is too short
-            frames = librosa.util.frame(y_padded, frame_length=frame_length, hop_length=hop_length)
+    # --- Determine Number of Frames and Times ---
+    # Calculate expected number of frames based on librosa's centered framing logic
+    # This count should align with the output of librosa features like stft, rms, zcr when center=True
+    if center:
+        num_frames = 1 + int(np.floor(len(y) / hop_length))
+    else:
+        # Calculate frames for non-centered analysis
+        # This might need adjustment based on how non-centered features are implemented
+        if len(y) >= frame_length:
+            num_frames = 1 + int(np.floor((len(y) - frame_length) / hop_length))
         else:
-            frames = librosa.util.frame(y, frame_length=frame_length, hop_length=hop_length)
+            num_frames = 0 # No full frames possible if signal < frame_length and not centered
 
-        # frames shape is (frame_length, num_frames)
-        num_frames = frames.shape[1]
-        if num_frames == 0:
-            logger.warning("Signal is too short for the given frame/hop length, no frames generated.")
-            return pd.DataFrame() if output_format == 'dataframe' else {'time': np.array([])}
-        logger.debug(f"Signal framed into {num_frames} frames.")
-    except Exception as e:
-        raise FeatureExtractionError(f"Error during signal framing: {e}")
+    if num_frames == 0:
+        logger.warning("Signal is too short for the given frame/hop length and centering setting, no frames generated.")
+        return pd.DataFrame() if output_format == 'dataframe' else {'time': np.array([])}
 
-    # Calculate frame times (center times of frames)
-    # Use n_fft=frame_length as reference for time calculation if centering
-    # Use librosa.frames_to_time for consistency with librosa features
+    logger.debug(f"Expecting {num_frames} frames based on signal length and parameters.")
+
+    # Calculate frame times (center times of frames if center=True)
     frame_indices = np.arange(num_frames)
+    # Use n_fft=frame_length for time calculation when center=True for consistency with STFT
     frame_times = librosa.frames_to_time(frame_indices, sr=sr, hop_length=hop_length, n_fft=frame_length if center else None)
+    results['time'] = frame_times # Store times early
 
     # --- Pre-calculate Spectrograms if needed ---
+    # These variables will store the computed spectrograms
     S_mag: Optional[NDArray[np.float64]] = None
     S_mel_log: Optional[NDArray[np.float64]] = None
     fft_freqs: Optional[NDArray[np.float64]] = None
-    # mel_freqs: Optional[NDArray[np.float64]] = None # Not strictly needed by MFCC func
 
     # Determine if any requested feature requires FFT or Mel spectrogram
     needs_fft_spectrum = any(f in FREQUENCY_DOMAIN_FEATURES for f in features)
@@ -170,21 +164,26 @@ def extract_features(
     if needs_fft_spectrum or needs_fft_spectrogram or needs_mel:
         logger.debug("Calculating STFT for spectral/cepstral features...")
         try:
-            # Calculate STFT using librosa - handles windowing and centering
+            # Calculate STFT using librosa - handles windowing, centering, and short signals
             stft_result = librosa.stft(
-                y, # Use original signal `y` for librosa's STFT which handles padding
-                n_fft=frame_length, # Use frame_length as n_fft by default
+                y, # Use original signal `y`
+                n_fft=frame_length,
                 hop_length=hop_length,
-                win_length=frame_length, # Ensure window matches frame if possible
+                win_length=frame_length, # Use frame_length for win_length unless specified otherwise
                 window=window,
                 center=center,
             )
-            # Ensure STFT result has expected number of frames consistent with frame_times
+            # Verify STFT frame count matches expected num_frames
             stft_num_frames = stft_result.shape[1]
-            if stft_num_frames != len(frame_times):
-                 logger.warning(f"STFT frames ({stft_num_frames}) mismatch calculated frame times ({len(frame_times)}). Using STFT frame count and recalculating times.")
-                 num_frames = stft_num_frames # Adjust frame count based on STFT result
-                 frame_times = librosa.frames_to_time(np.arange(num_frames), sr=sr, hop_length=hop_length, n_fft=frame_length if center else None) # Recalculate times
+            if stft_num_frames != num_frames:
+                 logger.warning(f"STFT frames ({stft_num_frames}) mismatch calculated frame times ({num_frames}). "
+                                f"This might happen with very short signals or specific edge padding. "
+                                f"Using STFT frame count ({stft_num_frames}) for subsequent features.")
+                 # Adjust num_frames and frame_times based on the actual STFT output
+                 num_frames = stft_num_frames
+                 frame_indices = np.arange(num_frames)
+                 frame_times = librosa.frames_to_time(frame_indices, sr=sr, hop_length=hop_length, n_fft=frame_length if center else None)
+                 results['time'] = frame_times # Update times in results
 
             S_mag = np.abs(stft_result) # Magnitude spectrogram (n_freq_bins, n_frames)
             fft_freqs = librosa.fft_frequencies(sr=sr, n_fft=frame_length) # Frequencies for STFT bins
@@ -203,14 +202,13 @@ def extract_features(
                  S_mel = librosa.feature.melspectrogram(
                      S=S_mag**power,
                      sr=sr,
-                     # n_fft, hop_length, win_length, window, center are inferred from S
                      n_mels=n_mels,
                      fmin=fmin,
                      fmax=fmax,
+                     # Other params like n_fft, hop_length are inferred from S
                  )
                  # Convert to log-power Mel spectrogram (dB scale) - common input for MFCC
                  S_mel_log = librosa.power_to_db(S_mel, ref=np.max)
-                 # mel_freqs = librosa.mel_frequencies(n_mels=n_mels, fmin=fmin, fmax=fmax) # For context if needed
                  logger.debug(f"Log-Mel spectrogram calculated. Shape: {S_mel_log.shape}")
 
         except Exception as e:
@@ -223,55 +221,75 @@ def extract_features(
 
         logger.debug(f"Extracting feature: {feature_name}")
         params = feature_params.get(feature_name, {})
+        feature_result: Optional[NDArray[Any]] = None # Initialize result for this feature
 
         try:
             # --- Handle frame-based features (Time Domain, ZCR, RMS, Placeholders) ---
-            # Check if feature is in the main dictionary (_AVAILABLE_FEATURES_DICT)
             if feature_name in _AVAILABLE_FEATURES_DICT:
                 func = _AVAILABLE_FEATURES_DICT[feature_name]
                 # Features calculated by librosa over the whole signal (ZCR, RMS, Placeholders)
-                # These functions handle their own framing based on provided args
                 if feature_name in ["zero_crossing_rate", "rms_energy", "hnr", "jitter", "shimmer"]:
-                     # Pass necessary framing parameters if the function needs them
-                     # DO NOT pass sr here, as these functions don't expect it
                      func_params = {
                          'frame_length': frame_length,
                          'hop_length': hop_length,
                          'center': center,
                          **params # Add feature-specific params
                      }
-                     # Jitter might need f0, but placeholder doesn't use it yet
-                     # if feature_name == 'jitter' and 'f0' in results: # Example dependency
-                     #     func_params['f0'] = results['f0']
+                     # Pass relevant context (y, sr) if needed by the function signature
+                     # Check function signature or requirements (placeholders need y, sr)
+                     if feature_name in ["hnr", "jitter", "shimmer"]:
+                         func_params['sr'] = sr # Pass sr to placeholders
+                         feature_result = func(y=y, **func_params)
+                     elif feature_name in ["zero_crossing_rate", "rms_energy"]:
+                         # These librosa features only need y and framing params
+                         feature_result = func(y=y, **func_params)
+                     else:
+                          # Should not happen based on current list, but handle defensively
+                          logger.warning(f"Unhandled feature '{feature_name}' in librosa feature block.")
+                          continue
 
-                     # Pass y (original signal) to these functions
-                     feature_result = func(y=y, **func_params)
-                     # Ensure result length matches num_frames derived from STFT/framing
-                     if len(feature_result) != num_frames:
-                          logger.warning(f"Length mismatch for {feature_name} ({len(feature_result)} vs {num_frames}). Adjusting.")
-                          # Simple truncation/padding - might need refinement
-                          if len(feature_result) > num_frames:
-                              feature_result = feature_result[:num_frames]
-                          else:
-                              # Pad with the last value or NaN? Use NaN for placeholders.
-                              pad_val = np.nan if feature_name in ["hnr", "jitter", "shimmer"] else feature_result[-1] if len(feature_result)>0 else 0
-                              feature_result = np.pad(feature_result, (0, num_frames - len(feature_result)), mode='constant', constant_values=pad_val)
-                     results[feature_name] = feature_result
                 else:
-                    # Apply other time-domain features frame-by-frame using our pre-calculated frames
-                    # Ensure 'frames' has the correct number of columns matching num_frames
-                    if frames.shape[1] != num_frames:
-                         logger.error(f"Frame array columns ({frames.shape[1]}) mismatch expected num_frames ({num_frames}) for time-domain feature '{feature_name}'. Skipping.")
-                         continue # Skip this feature if frame count is inconsistent
-                    feature_result = np.array([func(frames[:, i], **params) for i in range(num_frames)])
-                    results[feature_name] = feature_result
-                processed_features.add(feature_name)
+                    # Apply other time-domain features frame-by-frame
+                    # These functions expect a single frame as input
+                    # We need to generate the frames explicitly here if needed
+                    logger.debug(f"Applying time-domain feature '{feature_name}' frame-by-frame.")
+                    try:
+                         # Generate frames using librosa.util.frame, handling potential short signals
+                         # Use the original signal `y` and let librosa handle padding if center=True
+                         # Note: This framing is specific to these custom time-domain funcs
+                         if center:
+                              y_framed = librosa.util.frame(np.pad(y, frame_length // 2, mode='constant'), frame_length=frame_length, hop_length=hop_length)
+                         else:
+                              y_framed = librosa.util.frame(y, frame_length=frame_length, hop_length=hop_length)
+
+                         # Ensure frame count matches expected num_frames
+                         if y_framed.shape[1] != num_frames:
+                              logger.warning(f"Manual frame count ({y_framed.shape[1]}) mismatch for '{feature_name}' vs expected ({num_frames}). Using {num_frames} frames.")
+                              # Adjust if necessary, although this indicates potential inconsistency
+                              if y_framed.shape[1] > num_frames: y_framed = y_framed[:, :num_frames]
+                              # Padding might be complex here, maybe skip feature if mismatch is large?
+
+                         feature_result_list = [func(y_framed[:, i], **params) for i in range(y_framed.shape[1])]
+                         # Pad result if manual framing produced fewer frames than expected
+                         if len(feature_result_list) < num_frames:
+                              pad_width = num_frames - len(feature_result_list)
+                              # Pad with NaN or last value? Use NaN for safety.
+                              feature_result_list.extend([np.nan] * pad_width)
+                         feature_result = np.array(feature_result_list)
+
+                    except Exception as frame_err:
+                         # Catch framing errors specifically for time-domain features if signal is too short
+                         logger.error(f"Error framing signal for time-domain feature '{feature_name}': {frame_err}. Skipping feature.")
+                         continue # Skip this feature
+
+                # Store and mark as processed if result is valid
+                if feature_result is not None:
+                     results[feature_name] = feature_result
+                     processed_features.add(feature_name)
 
             # --- Handle frequency-domain features (operating on single frame spectrum) ---
-            # Use elif here to ensure features are not processed by both blocks
             elif feature_name in FREQUENCY_DOMAIN_FEATURES:
                 if S_mag is None or fft_freqs is None:
-                    # This should not happen if logic above is correct, but check defensively
                     raise FeatureExtractionError(f"FFT magnitude spectrum 'S_mag' not available for feature '{feature_name}'")
                 func = FREQUENCY_DOMAIN_FEATURES[feature_name]
                 # Apply frame-by-frame (column-by-column of S_mag)
@@ -281,42 +299,35 @@ def extract_features(
 
             # --- Handle spectral_contrast (operates on full spectrogram) ---
             elif feature_name == "spectral_contrast":
-                 if S_mag is None or fft_freqs is None: # Also need fft_freqs
+                 if S_mag is None or fft_freqs is None:
                      raise FeatureExtractionError(f"FFT magnitude spectrum 'S_mag' or 'fft_freqs' not available for feature '{feature_name}'")
-                 # Needs full magnitude spectrogram S, sr, and freqs
-                 feature_result = spectral_contrast(S=S_mag, sr=sr, freqs=fft_freqs, **params)
-                 # Result shape (n_bands+1, time), store each band as separate feature
-                 n_bands_contrast = feature_result.shape[0] - 1
+                 feature_result_bands = spectral_contrast(S=S_mag, sr=sr, freqs=fft_freqs, **params)
+                 n_bands_contrast = feature_result_bands.shape[0] - 1
                  for i in range(n_bands_contrast):
                      band_name = f"contrast_band_{i}"
-                     # Ensure length matches num_frames after potential STFT adjustment
-                     results[band_name] = feature_result[i, :num_frames]
+                     results[band_name] = feature_result_bands[i, :num_frames] # Ensure correct length
                      processed_features.add(band_name)
                  delta_name = "contrast_delta"
-                 results[delta_name] = feature_result[n_bands_contrast, :num_frames] # Overall contrast
+                 results[delta_name] = feature_result_bands[n_bands_contrast, :num_frames] # Ensure correct length
                  processed_features.add(delta_name)
                  processed_features.add(feature_name) # Mark original request as processed
 
             # --- Handle MFCC (operates on log-Mel spectrogram or signal) ---
             elif feature_name == "mfcc":
-                 # MFCC function itself needs either y or S (log-Mel spec)
                  mfcc_params = feature_params.get('mfcc', {})
-                 # Ensure necessary STFT params used for Mel spec are passed if recalculating inside mfcc
                  mfcc_params.setdefault('n_fft', frame_length)
                  mfcc_params.setdefault('hop_length', hop_length)
                  mfcc_params.setdefault('center', center)
                  mfcc_params.setdefault('window', window)
-                 # Call MFCC function - prefer passing pre-calculated S_mel_log
-                 feature_result = mfcc(y=y if S_mel_log is None else None, # Pass y only if S not available
-                                       sr=sr,
-                                       S=S_mel_log, # Pass pre-calculated log-Mel spectrogram
-                                       **mfcc_params)
-                 # Result shape (n_mfcc, time), store each coefficient as separate feature
-                 n_mfcc_coeffs = feature_result.shape[0]
+                 # Prefer passing pre-calculated S_mel_log
+                 feature_result_coeffs = mfcc(y=y if S_mel_log is None else None,
+                                              sr=sr,
+                                              S=S_mel_log,
+                                              **mfcc_params)
+                 n_mfcc_coeffs = feature_result_coeffs.shape[0]
                  for i in range(n_mfcc_coeffs):
                      mfcc_name = f"mfcc_{i}"
-                     # Ensure length matches num_frames after potential STFT adjustment
-                     results[mfcc_name] = feature_result[i, :num_frames]
+                     results[mfcc_name] = feature_result_coeffs[i, :num_frames] # Ensure correct length
                      processed_features.add(mfcc_name)
                  processed_features.add(feature_name) # Mark original request as processed
 
@@ -325,49 +336,56 @@ def extract_features(
 
         except Exception as e:
             logger.error(f"Error extracting feature '{feature_name}': {e}", exc_info=True)
-            # Option: Continue to next feature or re-raise? Re-raise for now.
             raise FeatureExtractionError(f"Failed to extract feature '{feature_name}': {e}")
 
     # --- Format Output ---
-    if not results:
+    if not results or len(results) == 1 and 'time' in results: # Check if only 'time' is present
         logger.warning("No features were successfully extracted.")
-        return pd.DataFrame() if output_format == 'dataframe' else {'time': np.array([])}
+        return pd.DataFrame() if output_format == 'dataframe' else {'time': results.get('time', np.array([]))}
 
     # Ensure all result arrays have the correct length (num_frames) before creating output
     final_results = {}
+    time_array = results.pop('time') # Remove time array temporarily
+
     for name, arr in results.items():
-        if arr.ndim == 1 and len(arr) == num_frames:
+        if not isinstance(arr, np.ndarray):
+             logger.warning(f"Result for '{name}' is not a NumPy array ({type(arr)}). Skipping.")
+             continue
+        if arr.ndim != 1:
+             logger.warning(f"Result for '{name}' is not 1D (shape {arr.shape}). Skipping.")
+             continue
+
+        if len(arr) == num_frames:
             final_results[name] = arr
-        elif arr.ndim == 1 and len(arr) > num_frames:
+        elif len(arr) > num_frames:
              logger.warning(f"Feature '{name}' array length ({len(arr)}) > num_frames ({num_frames}). Truncating.")
              final_results[name] = arr[:num_frames]
-        elif arr.ndim == 1 and len(arr) < num_frames:
+        elif len(arr) < num_frames:
              logger.warning(f"Feature '{name}' array length ({len(arr)}) < num_frames ({num_frames}). Padding with NaN.")
-             padded_arr = np.full(num_frames, np.nan) # Use NaN for padding
+             padded_arr = np.full(num_frames, np.nan)
              padded_arr[:len(arr)] = arr
              final_results[name] = padded_arr
-        else:
-             # This case might occur if a feature function returns unexpected shape
-             logger.error(f"Feature '{name}' has unexpected shape {arr.shape} or length != {num_frames}. Skipping.")
+        # else: # Should be covered by len(arr) == num_frames
+        #     logger.error(f"Feature '{name}' has unexpected length {len(arr)} vs {num_frames}. Skipping.")
 
-    # Add time array for dict output
+    # Add time array back for dict output
     if output_format == 'dict_of_arrays':
-        final_results['time'] = frame_times
+        final_results['time'] = time_array
         logger.info(f"Feature extraction complete. Returning dictionary of {len(final_results)} arrays.")
         return final_results
 
     # Create DataFrame for dataframe output
     elif output_format == 'dataframe':
+        if not final_results: # Check again after potential skips
+             logger.warning("No valid features remained after length checks.")
+             return pd.DataFrame()
         try:
-            # Create DataFrame from the verified/adjusted results
             df = pd.DataFrame(final_results)
-            # Set index to time
-            df.index = pd.to_timedelta(frame_times, unit='s')
+            df.index = pd.to_timedelta(time_array, unit='s')
             df.index.name = 'time'
             logger.info(f"Feature extraction complete. DataFrame shape: {df.shape}")
             return df
         except Exception as e:
-             # Catch errors during DataFrame creation (e.g., length mismatches if checks failed)
              raise FeatureExtractionError(f"Error creating output DataFrame: {e}")
     else:
         raise ValueError(f"Unsupported output format: {output_format}. Choose 'dataframe' or 'dict_of_arrays'.")

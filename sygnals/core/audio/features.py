@@ -160,9 +160,10 @@ def fundamental_frequency(
 
 def harmonic_to_noise_ratio(
     y: NDArray[np.float64],
-    sr: int,
-    frame_length: int = 2048, # Parameters might be needed for actual implementation
+    sr: int, # sr is needed for context, but not directly used in placeholder calculation
+    frame_length: int = 2048,
     hop_length: int = 512,
+    center: bool = True, # Assume centering consistent with other features
     **kwargs: Any
 ) -> NDArray[np.float64]:
     """
@@ -177,24 +178,39 @@ def harmonic_to_noise_ratio(
 
     Args:
         y: Audio time series (float64).
-        sr: Sampling rate.
+        sr: Sampling rate (unused in placeholder calculation but kept for signature consistency).
         frame_length: Analysis frame length (samples).
         hop_length: Hop length between frames (samples).
+        center: Whether the analysis is centered (affects frame count calculation).
         **kwargs: Additional parameters for future implementation.
 
     Returns:
         An array of NaNs with the expected length based on framing.
     """
     logger.warning("harmonic_to_noise_ratio feature is a placeholder and returns NaN.")
-    # Calculate expected number of frames to return NaN array of correct size
-    num_frames = len(librosa.util.frame(y, frame_length=frame_length, hop_length=hop_length)[0])
+    # Calculate expected number of frames consistent with librosa's centered framing
+    if center:
+        num_frames = 1 + int(np.floor(len(y) / hop_length))
+    else:
+        # Frame count calculation for non-centered analysis might differ slightly
+        # For simplicity, using librosa's frame function to determine length
+        try:
+             frames = librosa.util.frame(y, frame_length=frame_length, hop_length=hop_length)
+             num_frames = frames.shape[1]
+        except Exception:
+             # Fallback if framing fails (e.g., signal too short)
+             num_frames = 0
+    logger.debug(f"Placeholder HNR: Calculated num_frames = {num_frames}")
     return np.full(num_frames, np.nan, dtype=np.float64)
 
 def jitter(
     y: NDArray[np.float64],
-    sr: int,
+    sr: int, # sr is needed for context, but not directly used in placeholder calculation
     f0: Optional[NDArray[np.float64]] = None, # Requires fundamental frequency estimates
     method: str = 'local', # Common methods: 'local', 'rap', 'ppq5'
+    frame_length: int = 2048, # Added frame/hop/center for consistency
+    hop_length: int = 512,
+    center: bool = True,
     **kwargs: Any
 ) -> NDArray[np.float64]:
     """
@@ -209,10 +225,13 @@ def jitter(
 
     Args:
         y: Audio time series (float64).
-        sr: Sampling rate.
+        sr: Sampling rate (unused in placeholder calculation).
         f0: Optional pre-computed fundamental frequency contour (Hz). If None,
             it would need to be calculated internally (not done in placeholder).
         method: Jitter calculation method (e.g., 'local', 'rap').
+        frame_length: Analysis frame length (samples).
+        hop_length: Hop length between frames (samples).
+        center: Whether the analysis is centered.
         **kwargs: Additional parameters for future implementation.
 
     Returns:
@@ -223,17 +242,24 @@ def jitter(
     if f0 is not None:
         num_frames = len(f0)
     else:
-        # Estimate based on default framing if f0 is not available
-        frame_length = kwargs.get('frame_length', 2048)
-        hop_length = kwargs.get('hop_length', 512)
-        num_frames = len(librosa.util.frame(y, frame_length=frame_length, hop_length=hop_length)[0])
+        # Calculate expected number of frames consistent with librosa's centered framing
+        if center:
+            num_frames = 1 + int(np.floor(len(y) / hop_length))
+        else:
+            try:
+                frames = librosa.util.frame(y, frame_length=frame_length, hop_length=hop_length)
+                num_frames = frames.shape[1]
+            except Exception:
+                num_frames = 0
+    logger.debug(f"Placeholder Jitter: Calculated num_frames = {num_frames}")
     return np.full(num_frames, np.nan, dtype=np.float64)
 
 def shimmer(
     y: NDArray[np.float64],
-    sr: int,
-    frame_length: int = 2048, # Parameters might be needed for actual implementation
+    sr: int, # sr is needed for context, but not directly used in placeholder calculation
+    frame_length: int = 2048,
     hop_length: int = 512,
+    center: bool = True, # Assume centering consistent with other features
     method: str = 'local_db', # Common methods: 'local', 'local_db', 'apq11'
     **kwargs: Any
 ) -> NDArray[np.float64]:
@@ -248,9 +274,10 @@ def shimmer(
 
     Args:
         y: Audio time series (float64).
-        sr: Sampling rate.
+        sr: Sampling rate (unused in placeholder calculation).
         frame_length: Analysis frame length (samples).
         hop_length: Hop length between frames (samples).
+        center: Whether the analysis is centered.
         method: Shimmer calculation method (e.g., 'local', 'local_db').
         **kwargs: Additional parameters for future implementation.
 
@@ -258,8 +285,16 @@ def shimmer(
         An array of NaNs with the expected length based on framing.
     """
     logger.warning("shimmer feature is a placeholder and returns NaN.")
-    # Calculate expected number of frames to return NaN array of correct size
-    num_frames = len(librosa.util.frame(y, frame_length=frame_length, hop_length=hop_length)[0])
+    # Calculate expected number of frames consistent with librosa's centered framing
+    if center:
+        num_frames = 1 + int(np.floor(len(y) / hop_length))
+    else:
+        try:
+            frames = librosa.util.frame(y, frame_length=frame_length, hop_length=hop_length)
+            num_frames = frames.shape[1]
+        except Exception:
+            num_frames = 0
+    logger.debug(f"Placeholder Shimmer: Calculated num_frames = {num_frames}")
     return np.full(num_frames, np.nan, dtype=np.float64)
 
 

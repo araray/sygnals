@@ -44,8 +44,8 @@ def test_extract_single_time_feature(sample_audio_long):
     assert "mean_amplitude" in result_df.columns
     assert result_df.index.name == 'time'
     assert result_df["mean_amplitude"].dtype == np.float64
-    # Check number of frames based on signal length, frame, hop
-    expected_num_frames = int(np.floor(len(signal) / hop_length)) + 1
+    # Check number of frames based on signal length, frame, hop (centered)
+    expected_num_frames = 1 + int(np.floor(len(signal) / hop_length))
     assert len(result_df) == expected_num_frames
 
 def test_extract_single_freq_feature(sample_audio_long):
@@ -63,7 +63,7 @@ def test_extract_single_freq_feature(sample_audio_long):
     assert "spectral_centroid" in result_dict
     assert "time" in result_dict
     assert result_dict["spectral_centroid"].dtype == np.float64
-    expected_num_frames = int(np.floor(len(signal) / hop_length)) + 1
+    expected_num_frames = 1 + int(np.floor(len(signal) / hop_length))
     assert len(result_dict["spectral_centroid"]) == expected_num_frames
     assert len(result_dict["time"]) == expected_num_frames
 
@@ -86,7 +86,7 @@ def test_extract_mfcc(sample_audio_long):
     for col in expected_mfcc_cols:
         assert col in result_df.columns
         assert result_df[col].dtype == np.float64
-    expected_num_frames = int(np.floor(len(signal) / hop_length)) + 1
+    expected_num_frames = 1 + int(np.floor(len(signal) / hop_length))
     assert len(result_df) == expected_num_frames
 
 def test_extract_spectral_contrast(sample_audio_long):
@@ -109,7 +109,7 @@ def test_extract_spectral_contrast(sample_audio_long):
         assert col in result_dict
         assert result_dict[col].dtype == np.float64
     assert "time" in result_dict
-    expected_num_frames = int(np.floor(len(signal) / hop_length)) + 1
+    expected_num_frames = 1 + int(np.floor(len(signal) / hop_length))
     assert len(result_dict["time"]) == expected_num_frames
 
 
@@ -133,7 +133,7 @@ def test_extract_multiple_features(sample_audio_long):
     for col in expected_mfcc_cols:
         assert col in result_df.columns
 
-    expected_num_frames = int(np.floor(len(signal) / hop_length)) + 1
+    expected_num_frames = 1 + int(np.floor(len(signal) / hop_length))
     assert len(result_df) == expected_num_frames
 
 
@@ -165,7 +165,7 @@ def test_extract_feature_with_params(sample_audio_long):
 
 def test_extract_short_signal(sample_audio_long):
     """Test extracting features from a signal shorter than frame length."""
-    signal_short = sample_audio_long[0][:512] # Shorter than default frame_length
+    signal_short = sample_audio_long[0][:512] # Shorter than default frame_length (1024)
     sr = sample_audio_long[1]
     features_to_extract = ["rms_energy", "spectral_centroid"]
     frame_length=1024
@@ -174,9 +174,13 @@ def test_extract_short_signal(sample_audio_long):
     result_df = extract_features(signal_short, sr, features_to_extract,
                                  frame_length=frame_length, hop_length=hop_length)
 
-    # Expect one frame of output due to padding (if center=True)
+    # Expect two frames of output due to padding (center=True) and hop_length=512
+    # Frame 1 centered near sample 0 (includes padding)
+    # Frame 2 centered near sample 512 (includes padding)
+    expected_num_frames = 1 + int(np.floor(len(signal_short) / hop_length)) # 1 + floor(512/512) = 2
     assert isinstance(result_df, pd.DataFrame)
-    assert len(result_df) == 1
+    # Updated assertion: Expect 2 frames for this centered analysis
+    assert len(result_df) == expected_num_frames, f"Expected {expected_num_frames} frames, but got {len(result_df)}"
     assert "rms_energy" in result_df.columns
     assert "spectral_centroid" in result_df.columns
 
@@ -193,7 +197,8 @@ def test_extract_no_features(sample_audio_long):
 
     assert isinstance(result_dict, dict)
     assert 'time' in result_dict # Should still contain time
-    assert len(result_dict) == 1
+    # Check if only 'time' key exists
+    assert len(result_dict) == 1 or ('time' in result_dict and len(result_dict.keys()) == 1)
 
 
 # TODO: Add more tests for edge cases, different parameter combinations,
