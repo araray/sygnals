@@ -40,7 +40,8 @@ def test_save_and_query_database(tmp_path: Path, sample_dataframe):
 
     # Verify the queried data matches the original DataFrame
     # Use pandas testing function for robust comparison
-    pd.testing.assert_frame_equal(df_original, df_queried, check_dtype=False) # Allow dtype differences (e.g., int vs float)
+    # Check dtype=False because SQLite might change types (e.g., float64 -> float)
+    pd.testing.assert_frame_equal(df_original, df_queried, check_dtype=False)
 
 def test_save_database_replace(tmp_path: Path, sample_dataframe):
     """Test the if_exists='replace' behavior of save_to_database."""
@@ -105,8 +106,8 @@ def test_query_database_invalid_query(tmp_path: Path, sample_dataframe):
     save_to_database(sample_dataframe, str(db_path), table_name)
 
     invalid_query = "SELECT non_existent_column FROM non_existent_table"
-    # Expect pandasql/sqlite3 to raise an operational error
-    with pytest.raises(sqlite3.OperationalError): # Or potentially pd.io.sql.DatabaseError
+    # Expect pandas to raise DatabaseError when the underlying query fails
+    with pytest.raises(pd.errors.DatabaseError, match="no such table: non_existent_table"):
         query_database(str(db_path), invalid_query)
 
 def test_query_database_empty_table(tmp_path: Path):
