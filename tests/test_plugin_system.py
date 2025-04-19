@@ -7,10 +7,11 @@ Tests for the Sygnals plugin system (loading, registration, management).
 import pytest
 import sys
 from pathlib import Path
-import toml # For creating dummy manifests
+import toml
+from typing import Dict, Any, List, Optional, Tuple, Set, Type
 
 # Import components to test
-from sygnals.config import SygnalsConfig, PathsConfig
+from sygnals.config.models import SygnalsConfig, PathsConfig
 from sygnals.plugins.api import PluginRegistry, SygnalsPluginBase
 from sygnals.plugins.loader import PluginLoader, _load_plugin_state, _save_plugin_state
 from sygnals.plugins.scaffold import create_plugin_scaffold

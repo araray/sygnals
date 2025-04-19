@@ -103,7 +103,7 @@ from .{package_name}.plugin import {class_name}
 __all__ = ["{class_name}"]
 """
 
-PLUGIN_PY_TEMPLATE = """\
+PLUGIN_PY_TEMPLATE ="""\
 # {package_name}/plugin.py
 
 \"\"\"
@@ -198,7 +198,7 @@ class {class_name}(SygnalsPluginBase):
     #     registry.add_cli_command(cli.my_command_group)
     #     logger.debug(f"Plugin '{self.name}' registered CLI commands.")
 
-```
+"""
 
 # --- Helper Functions ---
 
