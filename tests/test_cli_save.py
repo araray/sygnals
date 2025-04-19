@@ -10,6 +10,7 @@ import pandas as pd
 from pathlib import Path
 from typing import Optional, Union, Literal, Dict, Any, Tuple
 from numpy.testing import assert_allclose # FIX: Import assert_allclose
+import logging # Import logging for caplog
 
 from click.testing import CliRunner
 
@@ -124,8 +125,9 @@ def test_save_dataset_format_override(runner: CliRunner, sample_input_data: Tupl
     assert save_call_args[1] == expected_output_file
 
 
+# FIX: Add caplog fixture to capture logs
 @pytest.mark.parametrize("assembly_method", ["vectors", "sequences", "image"])
-def test_save_dataset_placeholders(runner: CliRunner, sample_input_data: Tuple[Path, Any], mock_save_data, assembly_method: str):
+def test_save_dataset_placeholders(runner: CliRunner, sample_input_data: Tuple[Path, Any], mock_save_data, assembly_method: str, caplog):
     """Test placeholder assembly methods ('vectors', 'sequences', 'image')."""
     input_file, expected_data = sample_input_data
     output_file = input_file.parent / f"output_dataset_{assembly_method}{input_file.suffix}"
@@ -136,16 +138,19 @@ def test_save_dataset_placeholders(runner: CliRunner, sample_input_data: Tuple[P
         "--assembly-method", assembly_method
     ]
 
-    result = runner.invoke(cli, args)
+    # Capture logs at WARNING level or higher
+    with caplog.at_level(logging.WARNING):
+        result = runner.invoke(cli, args)
 
     print("CLI Output:\n", result.output) # For debugging stdout
     print("CLI Stderr:\n", result.stderr) # For debugging stderr
+    print("Captured Log:\n", caplog.text) # Print captured log
     if result.exception: print("Exception:\n", result.exception)
 
     assert result.exit_code == 0
     assert "Successfully saved dataset" in result.output
-    # Check for warning about placeholder implementation in stderr (where warnings often go)
-    assert "not yet implemented" in result.stderr # Check stderr
+    # FIX: Check caplog.text for the warning message
+    assert "not yet implemented" in caplog.text
 
     # Verify save_data was still called (passing through original data for now)
     mock_save_data.assert_called_once()
@@ -185,6 +190,6 @@ def test_save_dataset_invalid_input(runner: CliRunner, tmp_path: Path, mocker):
     if result.exception: print("Exception:\n", result.exception)
 
     assert result.exit_code != 0
-    # Error message might come from read_data or the command's error handling
-    # Check stderr for the error message
-    assert "Error" in result.stderr or "Error" in result.output # Check both just in case
+    # Check stderr or exception message for the error
+    assert result.exception is not None
+    assert "Error during dataset saving" in str(result.exception) or "Cannot read this" in str(result.exception)
