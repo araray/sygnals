@@ -154,8 +154,9 @@ def test_segment_fixed_length_cmd_invalid_input(runner: CliRunner, tmp_path: Pat
     if result.exception: print("Exception:\n", result.exception)
 
     assert result.exit_code != 0
-    # Check stderr for the error message
-    assert "Input file" in result.stderr and "not recognized as audio" in result.stderr
+    # FIX: Check exception message instead of stderr
+    assert result.exception is not None
+    assert "Input file" in str(result.exception) and "not recognized as audio" in str(result.exception)
     mock_read.assert_called_once()
 
 
@@ -169,8 +170,9 @@ def test_segment_fixed_length_cmd_missing_output(runner: CliRunner, tmp_path: Pa
     ]
     result = runner.invoke(cli, args)
     assert result.exit_code != 0
-    # FIX: Check stderr for Click's missing parameter message
-    assert "Missing parameter: output" in result.stderr
+    # FIX: Check exception type and parameter hint
+    assert isinstance(result.exception, click.exceptions.MissingParameter)
+    assert result.exception.param_hint == 'output'
 
 
 def test_segment_fixed_length_cmd_zero_segments(runner: CliRunner, mock_audio_read, tmp_path: Path, mocker):
@@ -189,7 +191,7 @@ def test_segment_fixed_length_cmd_zero_segments(runner: CliRunner, mock_audio_re
     args = [
         "segment", "fixed-length", str(input_file),
         "--output", str(output_dir),
-        "--length", "10.0", # Use long length to ensure it might return zero
+        "--length", "10.0", # Use long length to potentially trigger zero segments
     ]
 
     result = runner.invoke(cli, args)
@@ -199,7 +201,7 @@ def test_segment_fixed_length_cmd_zero_segments(runner: CliRunner, mock_audio_re
     if result.exception: print("Exception:\n", result.exception)
 
     assert result.exit_code == 0
-    # FIX: Check stderr for the warning message (click.echo goes to stdout by default)
+    # FIX: Check stdout for the warning message (click.echo writes here)
     assert "Warning: No segments generated" in result.output
     mock_core_segment.assert_called_once()
     mock_save.assert_not_called() # Save should not be called
