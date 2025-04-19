@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from click.testing import CliRunner
+import click # Import click to check for exceptions
 from numpy.testing import assert_allclose # Import assert_allclose
 
 # Import the main CLI entry point and the command group/functions to test/mock
@@ -163,12 +164,14 @@ def test_features_transform_scale_invalid_input(runner: CliRunner, tmp_path: Pat
         "--output", str(output_file),
     ]
 
-    result = runner.invoke(cli, args)
+    result = runner.invoke(cli, args, catch_exceptions=False) # Catch exceptions
 
     assert result.exit_code != 0
-    # FIX: Check exception message instead of stderr
-    assert result.exception is not None
-    assert "Input file" in str(result.exception) and "not suitable for feature scaling" in str(result.exception)
+    # FIX: Check the original exception type and message using exc_info
+    assert result.exc_info is not None
+    exc_type, exc_value, _ = result.exc_info
+    assert issubclass(exc_type, click.exceptions.Abort) # Check if it aborted
+    assert "Input file" in str(exc_value) and "not suitable for feature scaling" in str(exc_value)
 
 
 def test_features_transform_scale_no_numeric(runner: CliRunner, tmp_path: Path, mocker):
@@ -186,12 +189,16 @@ def test_features_transform_scale_no_numeric(runner: CliRunner, tmp_path: Path, 
         "--output", str(output_file),
     ]
 
-    result = runner.invoke(cli, args)
+    result = runner.invoke(cli, args, catch_exceptions=False) # Catch exceptions
 
     assert result.exit_code != 0
-    # FIX: Check exception message instead of stderr
-    assert result.exception is not None
-    assert "No valid numeric feature data found" in str(result.exception)
+    # FIX: Check the original exception type and message using exc_info
+    assert result.exc_info is not None
+    exc_type, exc_value, _ = result.exc_info
+    # The original error is ValueError, wrapped in UsageError, then Abort
+    assert issubclass(exc_type, click.exceptions.Abort)
+    assert "Error during feature scaling" in str(exc_value)
+    assert "No numeric columns found" in str(exc_value)
 
 
 def test_features_transform_scale_missing_sklearn(runner: CliRunner, sample_features_csv: Path, mocker):
@@ -209,13 +216,15 @@ def test_features_transform_scale_missing_sklearn(runner: CliRunner, sample_feat
         "--output", str(output_file),
     ]
 
-    result = runner.invoke(cli, args)
+    result = runner.invoke(cli, args, catch_exceptions=False) # Catch exceptions
 
     assert result.exit_code != 0
     # Check stderr for the error message (UsageError might print to stderr)
     # Or check exception message
-    assert result.exception is not None
-    assert "Missing dependency for scaling" in str(result.exception)
-    assert "scikit-learn" in str(result.exception)
+    assert result.exc_info is not None
+    exc_type, exc_value, _ = result.exc_info
+    assert issubclass(exc_type, click.exceptions.Abort) # Abort wraps UsageError which wraps ImportError
+    assert "Missing dependency for scaling" in str(exc_value)
+    assert "scikit-learn" in str(exc_value)
 
 # TODO: Add tests for 'features extract' when implemented.
