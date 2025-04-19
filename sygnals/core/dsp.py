@@ -2,6 +2,7 @@
 
 """
 Core Digital Signal Processing (DSP) functions.
+
 Includes FFT, STFT, CQT, Correlation, PSD, Convolution, Windowing, Envelope Detection etc.
 Excludes specific filter implementations (see filters.py).
 Uses scipy.fft for FFT/IFFT, librosa for STFT/CQT, and scipy.signal for others where appropriate.
@@ -9,7 +10,7 @@ Uses scipy.fft for FFT/IFFT, librosa for STFT/CQT, and scipy.signal for others w
 
 import logging
 # Import necessary types
-from typing import Tuple, Optional, Union, Literal
+from typing import Tuple, Optional, Union, Literal, Any
 
 import numpy as np
 import librosa # Use librosa for STFT, CQT etc. for consistency and features
@@ -18,16 +19,21 @@ from scipy.fft import fft, ifft, fftfreq # Use scipy.fft for basic FFT/IFFT
 from scipy.signal import fftconvolve, get_window, hilbert, correlate, periodogram, welch
 
 # Attempt absolute import for rms_energy at the top level
+# This is needed for the 'rms' method in amplitude_envelope
 try:
+    # Assuming rms_energy is correctly placed in the audio features module
     from sygnals.core.audio.features import rms_energy
     _RMS_ENERGY_AVAILABLE = True
 except ImportError:
     _RMS_ENERGY_AVAILABLE = False
     # Log warning if import fails during module load
-    logging.getLogger(__name__).warning("Could not import rms_energy from sygnals.core.audio.features. RMS envelope calculation will fail.")
+    logging.getLogger(__name__).warning(
+        "Could not import rms_energy from sygnals.core.audio.features. "
+        "RMS envelope calculation via amplitude_envelope(method='rms') will fail."
+    )
 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__) # Get logger for this module
 
 # --- FFT-related functions ---
 
@@ -55,6 +61,20 @@ def compute_fft(
                                       Only positive frequencies up to Nyquist are typically relevant
                                       for real input signals, but the full array is returned.
         - spectrum (NDArray[np.complex128]): Complex-valued FFT result (full spectrum).
+
+    Raises:
+        ValueError: If input data is not 1D or window type is invalid.
+        Exception: For other errors during FFT computation or windowing.
+
+    Example:
+        >>> import numpy as np
+        >>> fs = 100
+        >>> t = np.arange(fs) / fs
+        >>> signal = np.sin(2 * np.pi * 10 * t) # 10 Hz sine wave
+        >>> freqs, spectrum = compute_fft(signal, fs=fs)
+        >>> peak_freq_index = np.argmax(np.abs(spectrum[:fs//2]))
+        >>> print(f"Detected peak frequency: {freqs[peak_freq_index]:.2f} Hz")
+        Detected peak frequency: 10.00 Hz
     """
     if data.ndim != 1:
         raise ValueError("Input data must be a 1D array.")
@@ -63,19 +83,14 @@ def compute_fft(
     if window:
         logger.debug(f"Applying '{window}' window before FFT.")
         try:
-            win = get_window(window, data.shape[0], fftbins=False)
-            # Ensure window length matches data length precisely
-            if len(win) != len(data):
-                 logger.warning(f"Window length {len(win)} differs from data length {len(data)}. Adjusting window.")
-                 # This adjustment might not be ideal, consider erroring or more robust handling
-                 if len(win) > len(data): win = win[:len(data)]
-                 else: win = np.pad(win, (0, len(data) - len(win)), mode='constant')
-            data_processed = data * win # Apply window
+            # Apply window using the dedicated function
+            data_processed = apply_window(data, window_type=window)
         except ValueError as e:
-            logger.warning(f"Could not apply window '{window}': {e}. Proceeding without window.")
+            # Re-raise ValueError for invalid window type
+            raise ValueError(f"Invalid window type '{window}': {e}") from e
         except Exception as e:
              logger.warning(f"Unexpected error applying window '{window}': {e}. Proceeding without window.")
-             data_processed = data # Revert to original data on error
+             data_processed = data # Revert to original data on unexpected error
 
     if n is None:
         n = data_processed.shape[0]
@@ -84,10 +99,14 @@ def compute_fft(
          # Padding or truncation happens implicitly in fft() if n differs from data length
 
     logger.debug(f"Computing FFT with N={n}, Fs={fs}")
-    # Use scipy.fft.fft
-    spectrum = fft(data_processed, n=n)
-    # Use scipy.fft.fftfreq to get frequencies
-    freqs = fftfreq(n, d=1/fs)
+    try:
+        # Use scipy.fft.fft
+        spectrum = fft(data_processed, n=n)
+        # Use scipy.fft.fftfreq to get frequencies
+        freqs = fftfreq(n, d=1/fs)
+    except Exception as e:
+        logger.error(f"Error during FFT computation: {e}")
+        raise
 
     # Ensure output types are consistent
     return freqs.astype(np.float64, copy=False), spectrum.astype(np.complex128, copy=False)
@@ -110,6 +129,16 @@ def compute_ifft(
 
     Returns:
         Real-valued time-domain signal (float64).
+
+    Raises:
+        ValueError: If input spectrum is not 1D.
+        Exception: For errors during IFFT computation.
+
+    Example:
+        >>> freqs, spectrum = compute_fft(signal, fs=fs)
+        >>> reconstructed_signal = compute_ifft(spectrum)
+        >>> np.allclose(signal, reconstructed_signal)
+        True
     """
     if spectrum.ndim != 1:
         raise ValueError("Input spectrum must be a 1D array.")
@@ -117,12 +146,19 @@ def compute_ifft(
         n = spectrum.shape[0]
 
     logger.debug(f"Computing IFFT with N={n}")
-    # Use scipy.fft.ifft
-    time_domain_signal = ifft(spectrum, n=n)
+    try:
+        # Use scipy.fft.ifft
+        time_domain_signal = ifft(spectrum, n=n)
+    except Exception as e:
+        logger.error(f"Error during IFFT computation: {e}")
+        raise
+
     # Return the real part, assuming the original signal was real
     # Small imaginary parts might exist due to numerical precision
-    if np.max(np.abs(np.imag(time_domain_signal))) > 1e-9:
-         logger.warning("Significant imaginary part found in IFFT result. Input spectrum might not have conjugate symmetry.")
+    imag_part_max = np.max(np.abs(np.imag(time_domain_signal)))
+    if imag_part_max > 1e-9: # Threshold for warning
+         logger.warning(f"Significant imaginary part found in IFFT result (max abs: {imag_part_max:.2e}). "
+                        "Input spectrum might not have conjugate symmetry.")
     return np.real(time_domain_signal).astype(np.float64, copy=False)
 
 
@@ -160,6 +196,17 @@ def compute_stft(
     Returns:
         Complex-valued STFT matrix (shape: (1 + n_fft/2, num_frames)).
         Rows correspond to frequency bins, columns correspond to time frames.
+
+    Raises:
+        ValueError: If input data is not 1D.
+        Exception: For errors during librosa STFT computation.
+
+    Example:
+        >>> sr = 22050
+        >>> y = librosa.chirp(fmin=100, fmax=5000, sr=sr, duration=2)
+        >>> stft_matrix = compute_stft(y, n_fft=1024, hop_length=256)
+        >>> print(stft_matrix.shape)
+        (513, 173) # Example shape, depends on signal length and parameters
     """
     if y.ndim != 1:
         raise ValueError("Input data must be a 1D array.")
@@ -188,7 +235,7 @@ def compute_cqt(
     fmin: Optional[float] = None,
     n_bins: int = 84,
     bins_per_octave: int = 12,
-    **kwargs # Other librosa.cqt args (tuning, filter_scale, norm, res_type etc.)
+    **kwargs: Any # Other librosa.cqt args (tuning, filter_scale, norm, res_type etc.)
 ) -> NDArray[np.complex128]:
     """
     Computes the Constant-Q Transform (CQT) using librosa.
@@ -207,6 +254,17 @@ def compute_cqt(
 
     Returns:
         Complex-valued CQT matrix (shape: (n_bins, num_frames)).
+
+    Raises:
+        ValueError: If input data is not 1D.
+        Exception: For errors during librosa CQT computation.
+
+    Example:
+        >>> sr = 22050
+        >>> y = librosa.tone(frequency=440, sr=sr, duration=1) # A4 note
+        >>> cqt_matrix = compute_cqt(y, sr=sr, n_bins=60, bins_per_octave=12)
+        >>> print(cqt_matrix.shape)
+        (60, 44) # Example shape
     """
     if y.ndim != 1:
         raise ValueError("Input data must be a 1D array.")
@@ -236,7 +294,7 @@ def compute_cqt(
 def apply_convolution(
     data: NDArray[np.float64],
     kernel: NDArray[np.float64],
-    mode: str = "same"
+    mode: Literal['full', 'valid', 'same'] = "same"
 ) -> NDArray[np.float64]:
     """
     Applies 1D convolution using scipy.signal.fftconvolve (FFT-based method).
@@ -253,6 +311,17 @@ def apply_convolution(
 
     Returns:
         The result of the convolution (float64).
+
+    Raises:
+        ValueError: If input data or kernel is not 1D.
+        Exception: For errors during convolution.
+
+    Example:
+        >>> signal = np.array([0, 0, 1, 1, 1, 0, 0], dtype=float)
+        >>> kernel = np.array([1, -1], dtype=float) # Simple difference filter
+        >>> result = apply_convolution(signal, kernel, mode='same')
+        >>> print(result)
+        [ 0.  1.  0.  0. -1.  0.  0.]
     """
     if data.ndim != 1 or kernel.ndim != 1:
         raise ValueError("Input data and kernel must be 1D arrays.")
@@ -292,6 +361,19 @@ def compute_correlation(
     Returns:
         Cross-correlation result (float64). The interpretation of lags depends on the `mode`.
         For 'full', the zero lag corresponds to the center element.
+
+    Raises:
+        ValueError: If input sequences are not 1D.
+        Exception: For errors during correlation computation.
+
+    Example:
+        >>> x = np.array([0, 1, 2, 1, 0], dtype=float)
+        >>> y = np.array([0, 0, 1, 2, 1], dtype=float) # y is x shifted right by 1
+        >>> corr = compute_correlation(x, y, mode='full')
+        >>> lags = np.arange(-(len(x)-1), len(y)) # Lags for 'full' mode
+        >>> peak_lag = lags[np.argmax(corr)]
+        >>> print(f"Peak correlation at lag: {peak_lag}")
+        Peak correlation at lag: 1
     """
     if x.ndim != 1 or y.ndim != 1:
         raise ValueError("Input sequences for correlation must be 1D arrays.")
@@ -314,7 +396,7 @@ def compute_autocorrelation(
     Computes the auto-correlation of a 1-dimensional sequence using scipy.signal.correlate.
 
     Auto-correlation measures the similarity of a signal with a lagged version of itself.
-    Useful for finding periodic patterns.
+    Useful for finding periodic patterns or estimating pitch.
 
     Args:
         x: Input sequence (1D float64).
@@ -324,6 +406,23 @@ def compute_autocorrelation(
     Returns:
         Auto-correlation result (float64). For 'full' mode, the center element
         corresponds to zero lag and typically has the maximum value.
+
+    Raises:
+        ValueError: If input sequence is not 1D.
+        Exception: For errors during correlation computation.
+
+    Example:
+        >>> fs = 100
+        >>> t = np.arange(fs*2) / fs
+        >>> signal = np.sin(2 * np.pi * 10 * t) # 10 Hz sine wave
+        >>> autocorr = compute_autocorrelation(signal, mode='full')
+        >>> lags = np.arange(-(len(signal)-1), len(signal))
+        >>> zero_lag_index = len(signal) - 1
+        >>> assert np.argmax(autocorr) == zero_lag_index # Peak at zero lag
+        >>> period_samples = fs / 10 # Expected period = 10 samples
+        >>> peak_lag_index = zero_lag_index + int(round(period_samples))
+        >>> # Check for secondary peak at the expected period
+        >>> assert autocorr[peak_lag_index] > 0.8 * autocorr[zero_lag_index]
     """
     logger.debug(f"Computing auto-correlation: mode='{mode}', method='{method}'")
     # Autocorrelation is correlation with itself
@@ -359,6 +458,19 @@ def compute_psd_periodogram(
         Tuple containing:
         - frequencies (NDArray[np.float64]): Frequencies of the PSD estimate (one-sided).
         - Pxx (NDArray[np.float64]): Power Spectral Density or Power Spectrum estimate.
+
+    Raises:
+        ValueError: If input data is not 1D.
+        Exception: For errors during periodogram calculation.
+
+    Example:
+        >>> fs = 1000
+        >>> t = np.arange(fs) / fs
+        >>> signal = np.sin(2 * np.pi * 100 * t) # 100 Hz sine wave
+        >>> freqs, psd = compute_psd_periodogram(signal, fs=fs)
+        >>> peak_freq_index = np.argmax(psd)
+        >>> print(f"Peak frequency in PSD: {freqs[peak_freq_index]:.2f} Hz")
+        Peak frequency in PSD: 100.00 Hz
     """
     if x.ndim != 1:
         raise ValueError("Input data must be a 1D array.")
@@ -411,6 +523,19 @@ def compute_psd_welch(
         Tuple containing:
         - frequencies (NDArray[np.float64]): Frequencies of the PSD estimate (one-sided).
         - Pxx (NDArray[np.float64]): Power Spectral Density or Power Spectrum estimate.
+
+    Raises:
+        ValueError: If input data is not 1D.
+        Exception: For errors during Welch calculation.
+
+    Example:
+        >>> fs = 1000
+        >>> t = np.arange(fs) / fs
+        >>> signal = np.sin(2 * np.pi * 100 * t) + 0.1 * np.random.randn(fs) # Sine + noise
+        >>> freqs, psd = compute_psd_welch(signal, fs=fs, nperseg=256)
+        >>> peak_freq_index = np.argmax(psd)
+        >>> print(f"Peak frequency in Welch PSD: {freqs[peak_freq_index]:.2f} Hz")
+        Peak frequency in Welch PSD: 100.00 Hz
     """
     if x.ndim != 1:
         raise ValueError("Input data must be a 1D array.")
@@ -453,7 +578,7 @@ def amplitude_envelope(
         method: 'hilbert' uses the magnitude of the analytic signal (computed via
                 Hilbert transform). Provides instantaneous amplitude.
                 'rms' uses frame-based Root Mean Square energy. Provides a smoothed
-                envelope based on local energy.
+                envelope based on local energy. Requires `rms_energy` to be available.
         frame_length: Frame length in samples (required for 'rms' method).
         hop_length: Hop length in samples (required for 'rms' method).
 
@@ -461,6 +586,20 @@ def amplitude_envelope(
         Amplitude envelope (1D float64).
         - For 'hilbert', length matches input `y`.
         - For 'rms', length corresponds to the number of frames.
+
+    Raises:
+        ValueError: If input data is not 1D, method is invalid, or required parameters for 'rms' are missing.
+        ImportError: If 'rms' method is chosen but `rms_energy` could not be imported.
+        Exception: For errors during Hilbert or RMS calculation.
+
+    Example:
+        >>> sr = 1000
+        >>> t = np.arange(sr) / sr
+        >>> signal = np.sin(2 * np.pi * 10 * t) * np.exp(-t * 5) # Decaying sine
+        >>> env_hilbert = amplitude_envelope(signal, method='hilbert')
+        >>> env_rms = amplitude_envelope(signal, method='rms', frame_length=128, hop_length=64)
+        >>> # env_hilbert will closely follow the exp(-t*5) decay
+        >>> # env_rms will be a smoothed, frame-based version of the decay
     """
     if y.ndim != 1:
         raise ValueError("Input data must be a 1D array.")
@@ -479,14 +618,16 @@ def amplitude_envelope(
     elif method == 'rms':
         if not _RMS_ENERGY_AVAILABLE:
              # Raise error if rms_energy couldn't be imported
-             raise ImportError("rms_energy function not found. Cannot compute RMS envelope.")
+             raise ImportError("rms_energy function not found (check sygnals.core.audio.features). "
+                               "Cannot compute RMS envelope.")
         if frame_length is None or hop_length is None:
             raise ValueError("frame_length and hop_length are required for 'rms' envelope method.")
         try:
             # Use the imported RMS energy function
             # Note: RMS is related to envelope but not exactly the same as Hilbert envelope.
             # It gives energy per frame, acting as a smoothed, frame-based envelope.
-            rms_env = rms_energy(y, frame_length=frame_length, hop_length=hop_length, center=True) # Assume center=True for consistency
+            # Assume center=True for consistency with other librosa features
+            rms_env = rms_energy(y, frame_length=frame_length, hop_length=hop_length, center=True)
             return rms_env # Already float64
         except Exception as e:
             logger.error(f"Error computing RMS envelope: {e}")
@@ -512,7 +653,19 @@ def apply_window(
                      See `scipy.signal.get_window` documentation for available types.
 
     Returns:
-        Windowed data (float64). Returns original data if windowing fails.
+        Windowed data (float64).
+
+    Raises:
+        ValueError: If input data is not 1D or window_type is invalid.
+        Exception: For other errors during window generation or application.
+
+    Example:
+        >>> signal = np.ones(10)
+        >>> windowed_signal = apply_window(signal, window_type='hann')
+        >>> print(windowed_signal.shape)
+        (10,)
+        >>> print(windowed_signal[0], windowed_signal[-1]) # Hann window goes to zero at ends
+        0.0 0.0
     """
     if data.ndim != 1:
         raise ValueError("Input data must be a 1D array.")
@@ -524,17 +677,15 @@ def apply_window(
         # Ensure window length matches data length precisely (should match if fftbins=False)
         if len(window) != len(data):
              # This case should be rare with fftbins=False but handle defensively
-             logger.error(f"Window length mismatch: got {len(window)}, expected {len(data)}. Cannot apply window.")
-             # Return original data if windowing fails critically
-             return data.astype(np.float64, copy=False)
+             raise ValueError(f"Internal error: Window length mismatch after get_window "
+                              f"(got {len(window)}, expected {len(data)}).")
         # Apply window by element-wise multiplication
         return (data * window).astype(np.float64, copy=False)
     except ValueError as e:
-        # Specific error for invalid window type
+        # Specific error for invalid window type from get_window
         logger.error(f"Invalid window type '{window_type}': {e}")
-        raise # Re-raise value error as it indicates incorrect usage
+        raise ValueError(f"Invalid window type '{window_type}'.") from e
     except Exception as e:
         # Catch other potential errors during window application
-        logger.warning(f"Unexpected error applying window '{window_type}': {e}. Returning original data.")
-        # Return original data as a fallback on unexpected errors
-        return data.astype(np.float64, copy=False)
+        logger.error(f"Unexpected error applying window '{window_type}': {e}")
+        raise
