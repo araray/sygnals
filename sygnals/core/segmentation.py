@@ -9,7 +9,7 @@ using methods like fixed-length windows, silence detection, or event detection.
 
 import logging
 import numpy as np
-from numpy.typing import NDArray
+from numpy.typing import NDArray # Import NDArray
 # Import necessary types
 from typing import List, Tuple, Optional, Literal, Union, Dict, Any
 import librosa # Used for framing and potentially event detection
@@ -40,8 +40,7 @@ def segment_fixed_length(
              (unless filtered by min_segment_length_sec). If False, discard the
              last partial segment.
         min_segment_length_sec: If set, discard segments shorter than this duration
-                                (in seconds). Useful when `pad=True` to avoid very
-                                short trailing segments.
+                                (in seconds), checked *before* padding.
 
     Returns:
         List of NumPy arrays, where each array is a segment of the signal (float64).
@@ -65,13 +64,11 @@ def segment_fixed_length(
     # Ensure hop length is at least 1 sample
     hop_length_samples = max(1, hop_length_samples)
 
+    min_samples = int(min_segment_length_sec * sr) if min_segment_length_sec is not None else 0
+
     logger.info(f"Segmenting signal (length {len(y)}) into fixed segments: "
                 f"len={segment_length_sec}s ({segment_length_samples} samples), "
-                f"overlap={overlap_ratio*100:.1f}% ({hop_length_samples} hop samples), pad={pad}")
-
-    # Use librosa's framing utility which handles padding implicitly if needed
-    # Note: librosa.util.frame centers frames by default, which might not be
-    # the desired behavior for simple sequential segmentation. We'll implement manually.
+                f"overlap={overlap_ratio*100:.1f}% ({hop_length_samples} hop samples), pad={pad}, min_len={min_samples} samples")
 
     segments = []
     start_sample = 0
@@ -80,26 +77,29 @@ def segment_fixed_length(
     while start_sample < total_samples:
         end_sample = start_sample + segment_length_samples
         segment = y[start_sample:end_sample]
+        original_segment_len = len(segment) # Store original length before potential padding
 
-        # Handle padding or truncation for the last segment
-        if end_sample > total_samples:
+        # FIX: Check minimum length *before* padding
+        if min_samples > 0 and original_segment_len < min_samples:
+            logger.debug(f"Discarding segment starting at {start_sample} (original length {original_segment_len} < min {min_samples}).")
+            segment = None # Mark for skipping
+        elif end_sample > total_samples: # Handle last segment padding/truncation only if not discarded
             if pad:
                 # Pad the last segment with zeros to match desired length
-                padding_needed = segment_length_samples - len(segment)
+                padding_needed = segment_length_samples - original_segment_len
                 segment = np.pad(segment, (0, padding_needed), mode='constant')
             else:
                 # Discard the last partial segment if padding is disabled
-                segment = None # Mark for potential filtering
-
-        # Check minimum segment length if specified
-        if segment is not None and min_segment_length_sec is not None:
-            min_samples = int(min_segment_length_sec * sr)
-            if len(segment) < min_samples:
-                 logger.debug(f"Discarding segment starting at {start_sample} (length {len(segment)} < min {min_samples}).")
-                 segment = None # Discard short segment
+                segment = None # Mark for skipping
 
         if segment is not None:
-            segments.append(segment.astype(np.float64, copy=False)) # Ensure float64
+            # Ensure segment length matches expected length if padding occurred
+            if pad and len(segment) != segment_length_samples:
+                 # This might happen if the original segment was already discarded by min_len check
+                 # but somehow segment is not None. Log a warning.
+                 logger.warning(f"Segment length mismatch after potential padding/filtering. Expected {segment_length_samples}, got {len(segment)}. Skipping.")
+            else:
+                 segments.append(segment.astype(np.float64, copy=False)) # Ensure float64
 
         # Move to the next segment start position
         start_sample += hop_length_samples
