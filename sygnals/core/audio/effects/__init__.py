@@ -4,26 +4,24 @@
 Audio Effects Subpackage.
 
 Contains implementations of various audio effects like reverb, delay, EQ,
-modulation effects (chorus, flanger, tremolo), compression, pitch/time manipulation,
-and utility effects (gain, noise).
+modulation effects (chorus, flanger, tremolo), compression, and basic utilities.
+
+Note: Time/pitch manipulation and noise addition for augmentation purposes
+      have been moved to the `sygnals.core.augment` package.
 """
 
 # Import specific effects functions or classes here as they are implemented/updated
-from .pitch_shift import pitch_shift
-from .time_stretch import time_stretch
 from .compression import simple_dynamic_range_compression
 from .reverb import apply_reverb
 from .delay import apply_delay
 from .equalizer import apply_graphic_eq, apply_parametric_eq
-from .chorus import apply_chorus # Placeholder added
-from .flanger import apply_flanger # Placeholder added
-from .tremolo import apply_tremolo # Placeholder added
-from .utility import adjust_gain, add_noise # Utility effects added
+from .chorus import apply_chorus # Placeholder
+from .flanger import apply_flanger # Placeholder
+from .tremolo import apply_tremolo # Placeholder
+from .utility import adjust_gain # Keep utility effects like gain adjust here
 
 __all__ = [
     # Core Effects
-    "pitch_shift",
-    "time_stretch",
     "simple_dynamic_range_compression",
     "apply_reverb",
     "apply_delay",
@@ -33,8 +31,8 @@ __all__ = [
     "apply_chorus",
     "apply_flanger",
     "apply_tremolo",
-    # Utility/Augmentation Effects
+    # Utility Effects
     "adjust_gain",
-    "add_noise",
     # Add other effect functions/classes as they are implemented
+    # Removed: pitch_shift, time_stretch, add_noise (moved to augment)
 ]
