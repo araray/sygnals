@@ -190,15 +190,17 @@ def test_augment_cmd_invalid_input_type(runner: CliRunner, tmp_path: Path, mocke
     args_noise = ["augment", "add-noise", str(input_file), "-o", str(output_file), "--snr", "10"]
     result_noise = runner.invoke(cli, args_noise)
     assert result_noise.exit_code != 0
-    # Check stderr for the specific error message from click.UsageError
-    assert "Input file" in result_noise.stderr and "not recognized as audio" in result_noise.stderr
+    # FIX: Check exception message instead of stderr
+    assert result_noise.exception is not None
+    assert "Input file" in str(result_noise.exception) and "not recognized as audio" in str(result_noise.exception)
 
     # Try pitch-shift
     args_pitch = ["augment", "pitch-shift", str(input_file), "-o", str(output_file), "--steps", "1"]
     result_pitch = runner.invoke(cli, args_pitch)
     assert result_pitch.exit_code != 0
-    # Check stderr for the specific error message
-    assert "Input file" in result_pitch.stderr and "not recognized as audio" in result_pitch.stderr
+    # FIX: Check exception message instead of stderr
+    assert result_pitch.exception is not None
+    assert "Input file" in str(result_pitch.exception) and "not recognized as audio" in str(result_pitch.exception)
 
 
 def test_augment_cmd_missing_option(runner: CliRunner, tmp_path: Path):
@@ -211,19 +213,22 @@ def test_augment_cmd_missing_option(runner: CliRunner, tmp_path: Path):
     args_noise = ["augment", "add-noise", str(input_file), "-o", str(output_file)]
     result_noise = runner.invoke(cli, args_noise)
     assert result_noise.exit_code != 0
-    # FIX: Check stderr for Click's missing parameter message
-    assert "Missing parameter: snr" in result_noise.stderr
+    # FIX: Check exception type and parameter hint
+    assert isinstance(result_noise.exception, click.exceptions.MissingParameter)
+    assert result_noise.exception.param_hint == 'snr'
 
     # Missing --steps for pitch-shift
     args_pitch = ["augment", "pitch-shift", str(input_file), "-o", str(output_file)]
     result_pitch = runner.invoke(cli, args_pitch)
     assert result_pitch.exit_code != 0
-    # FIX: Check stderr for Click's missing parameter message
-    assert "Missing parameter: steps" in result_pitch.stderr
+    # FIX: Check exception type and parameter hint
+    assert isinstance(result_pitch.exception, click.exceptions.MissingParameter)
+    assert result_pitch.exception.param_hint == 'steps'
 
     # Missing --rate for time-stretch
     args_stretch = ["augment", "time-stretch", str(input_file), "-o", str(output_file)]
     result_stretch = runner.invoke(cli, args_stretch)
     assert result_stretch.exit_code != 0
-    # FIX: Check stderr for Click's missing parameter message
-    assert "Missing parameter: rate" in result_stretch.stderr
+    # FIX: Check exception type and parameter hint
+    assert isinstance(result_stretch.exception, click.exceptions.MissingParameter)
+    assert result_stretch.exception.param_hint == 'rate'
