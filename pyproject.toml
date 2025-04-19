@@ -29,7 +29,7 @@ classifiers = [
 ]
 keywords = ["signal processing", "audio processing", "dsp", "data science", "cli", "feature engineering"]
 
-# Core dependencies from requirements.txt + additions for Phase 1
+# Core dependencies from requirements.txt + additions
 dependencies = [
     "numpy>=2.2.4",
     "scipy>=1.15.2",
@@ -45,12 +45,14 @@ dependencies = [
     "pydantic>=2.11.3",
     "toml>=0.10.2",
     "packaging", # For plugin version comparisons (Phase 3 dependency, added early)
+    "resampy>=0.4.3", # Added dependency for librosa resampling
     # "openpyxl", # Only needed if dealing with Excel files, removed for now
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.3.5",
+    "pytest-mock>=3.14.0", # Added dependency for mocker fixture
     "mypy>=1.15.0",
     "flake8>=7.2.0",
     "black>=25.1.0",
