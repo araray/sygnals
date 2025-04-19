@@ -14,7 +14,8 @@ from typing import Optional # Import Optional for type hinting
 # Import components to test
 from sygnals.config.models import SygnalsConfig, PathsConfig
 from sygnals.plugins.api import PluginRegistry, SygnalsPluginBase
-from sygnals.plugins.loader import PluginLoader, _load_plugin_state, _save_plugin_state
+# FIX: Import constant directly
+from sygnals.plugins.loader import PluginLoader, _load_plugin_state, _save_plugin_state, PLUGIN_STATE_FILENAME
 from sygnals.plugins.scaffold import create_plugin_scaffold
 from sygnals.version import __version__ as core_version
 
@@ -274,7 +275,6 @@ class NotAPlugin:
     # Create the dummy plugin structure first
     _, entry_point_path = create_dummy_plugin(plugin_dir, plugin_name)
     # Modify the generated plugin.py
-    # FIX: Use plugin_name here instead of undefined 'name'
     package_name = plugin_name.replace("-", "_")
     class_name_correct = "".join(part.capitalize() for part in plugin_name.split('-')) + "Plugin"
     class_name_wrong = "NotAPlugin" # The class we actually want to test
@@ -313,8 +313,8 @@ class {class_name_correct}:
 def test_plugin_state_save_load(base_config: SygnalsConfig):
     """Test saving and loading plugin enabled/disabled state."""
     state_dir = base_config.paths.plugin_dir.parent
-    # Use the constant defined in loader.py for consistency
-    state_file = state_dir / PluginLoader.PLUGIN_STATE_FILENAME
+    # FIX: Use the imported constant directly
+    state_file = state_dir / PLUGIN_STATE_FILENAME
 
     # Initial state: file doesn't exist, load should return empty dict
     assert not state_file.exists()
@@ -361,14 +361,14 @@ def test_plugin_list_cli(plugin_loader: PluginLoader, base_config: SygnalsConfig
     assert result.exit_code == 0
     assert "plugin-loaded" in result.output
     assert "1.0" in result.output
-    # FIX: Check for plain text status instead of Rich formatting
-    assert "loaded" in result.output
+    assert "loaded" in result.output # Check plain text status
     assert "plugin-disabled" in result.output
     assert "1.1" in result.output
     assert "disabled" in result.output
     assert "plugin-incomp" in result.output
     assert "1.2" in result.output
-    assert "error/incompatible" in result.output
+    # FIX: Check for truncated status string from Rich table
+    assert "error/incom…" in result.output
     assert "local" in result.output # Check source
 
 
