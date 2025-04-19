@@ -19,7 +19,12 @@ from sygnals.plugins.api import PluginRegistry # Import registry
 from sygnals.plugins.loader import PluginLoader # Import loader
 
 # Import command groups/functions
-from .plugin_cmd import plugin_cmd # Import the new plugin command group
+from .plugin_cmd import plugin_cmd
+from .segment_cmd import segment_cmd # Import the new segment command group
+# from .augment_cmd import augment_cmd # Will be added later
+# from .save_cmd import save_cmd # Will be added later
+# from .features_cmd import features_cmd # Will be added later
+
 # from .analyze_cmd import analyze
 # from .transform_cmd import transform
 # from .filter_cmd import filter_cmd
@@ -48,28 +53,6 @@ def _call_plugin_teardown():
         logger.debug("No plugin loader instance found, skipping teardown.")
 
 atexit.register(_call_plugin_teardown) # Register teardown to run on exit
-
-
-# --- Modified ConfigGroup in base_cmd.py (Conceptual - Actual code in base_cmd.py) ---
-# The ConfigGroup in base_cmd.py needs modification to initialize and run the plugin loader.
-# See the updated base_cmd.py file provided separately.
-# It should do something like this within its invoke method:
-#
-#   config = load_configuration()
-#   setup_logging(config, verbosity)
-#
-#   # Initialize and run plugin loader *after* config/logging setup
-#   global plugin_loader, plugin_registry
-#   plugin_loader = PluginLoader(config, plugin_registry)
-#   plugin_loader.discover_and_load()
-#
-#   # Store loader and registry in context object (make ctx.obj a dict)
-#   ctx.obj = {
-#       'config': config,
-#       'plugin_loader': plugin_loader,
-#       'plugin_registry': plugin_registry,
-#   }
-#   super().invoke(ctx) # Proceed with command invocation
 
 
 # --- Main CLI Group ---
@@ -122,8 +105,13 @@ def hello(ctx):
 
 # Add the new plugin command group
 main_cli.add_command(plugin_cmd)
+# Add the new segment command group
+main_cli.add_command(segment_cmd)
 
 # Add other commands/groups as they are refactored or created
+# main_cli.add_command(features_cmd)
+# main_cli.add_command(augment_cmd)
+# main_cli.add_command(save_cmd)
 # main_cli.add_command(analyze)
 # main_cli.add_command(transform)
 # main_cli.add_command(filter_cmd, name="filter")
