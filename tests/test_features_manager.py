@@ -212,9 +212,12 @@ def test_extract_very_short_signal():
     result_df = extract_features(signal_veryshort, sr, features_to_extract,
                                  frame_length=frame_length, hop_length=hop_length)
 
-    # Expect empty DataFrame as no frames can be generated
+    # FIX: Expect 1 frame due to centering, not an empty DataFrame
+    expected_num_frames = get_expected_frames(len(signal_veryshort), hop_length, frame_length, center=True)
+    # 1 + 100 // 512 = 1 + 0 = 1 frame
     assert isinstance(result_df, pd.DataFrame)
-    assert result_df.empty
+    assert not result_df.empty
+    assert len(result_df) == expected_num_frames # Should have 1 frame
 
 # Test Error Handling and Options
 def test_extract_unknown_feature(sample_audio_long):

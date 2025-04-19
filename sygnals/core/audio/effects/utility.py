@@ -9,6 +9,7 @@ import numpy as np
 from numpy.typing import NDArray
 # Import necessary types
 from typing import Optional, Literal
+import warnings # Import the warnings module
 
 logger = logging.getLogger(__name__)
 
@@ -90,13 +91,15 @@ def add_noise(
         noise = rng.standard_normal(n_samples).astype(np.float64)
     elif noise_type == 'pink':
         # Placeholder for pink noise generation
-        # Requires filtering white noise (e.g., Voss-McCartney algorithm or FFT filtering)
+        # FIX: Use warnings.warn for placeholder message
+        warnings.warn("Pink noise generation is currently a placeholder (using white noise).", UserWarning, stacklevel=2)
         logger.warning("Pink noise generation is currently a placeholder (using white noise).")
         noise = rng.standard_normal(n_samples).astype(np.float64) # Using white noise as placeholder
         # raise NotImplementedError("Pink noise generation is not yet implemented.")
     elif noise_type == 'brown':
         # Placeholder for brown noise (Brownian/red noise) generation
-        # Requires integrating white noise (random walk)
+        # FIX: Use warnings.warn for placeholder message
+        warnings.warn("Brown noise generation is currently a placeholder (using white noise).", UserWarning, stacklevel=2)
         logger.warning("Brown noise generation is currently a placeholder (using white noise).")
         noise = rng.standard_normal(n_samples).astype(np.float64) # Using white noise as placeholder
         # raise NotImplementedError("Brown noise generation is not yet implemented.")

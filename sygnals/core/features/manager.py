@@ -14,6 +14,7 @@ import librosa # Needed for framing, time/frequency utils, and some features
 from numpy.typing import NDArray
 # Import necessary types
 from typing import List, Dict, Any, Optional, Tuple, Union, Callable, Set, Literal
+import inspect # Import inspect to check function arguments
 
 # Import feature dictionaries and specific functions needed for dispatch
 from .time_domain import TIME_DOMAIN_FEATURES
@@ -291,9 +292,51 @@ def extract_features(
                 current_num_frames = S_mag.shape[1] # Update frame count based on actual STFT
                 func = _SPECTRUM_BASED_FEATURES[feature_name]
                 # Apply frame-by-frame (column-by-column of S_mag)
-                frame_results = [func(S_mag[:, i], fft_freqs, **params) for i in range(current_num_frames)]
+                # FIX: Check function signature and pass only required args
+                sig = inspect.signature(func)
+                func_args = {}
+                if 'magnitude_spectrum' in sig.parameters:
+                    func_args['magnitude_spectrum'] = None # Placeholder, filled in loop
+                if 'frequencies' in sig.parameters:
+                    func_args['frequencies'] = fft_freqs
+                if 'centroid' in sig.parameters: # Handle centroid dependency for bandwidth
+                    # Ensure centroid is calculated first if needed
+                    if 'spectral_centroid' not in results:
+                         logger.warning(f"Feature '{feature_name}' requires 'spectral_centroid', calculating it first.")
+                         # This recursive call is complex, better to handle dependencies explicitly
+                         # For now, just calculate it if needed by bandwidth
+                         if feature_name == 'spectral_bandwidth':
+                              centroid_results = [
+                                  _SPECTRUM_BASED_FEATURES['spectral_centroid'](S_mag[:, i], fft_freqs)
+                                  for i in range(current_num_frames)
+                              ]
+                              results['spectral_centroid'] = np.array(centroid_results, dtype=np.float64)
+                         else:
+                              # If another feature needs centroid, log warning or raise error
+                              logger.warning(f"Feature '{feature_name}' needs 'spectral_centroid' but it wasn't requested or calculated yet.")
+                              # Skip this feature if centroid is missing?
+                              # continue
+                    # Add centroid to func_args if available
+                    if 'spectral_centroid' in results:
+                         func_args['centroid'] = None # Placeholder, filled in loop
+
+                frame_results = []
+                for i in range(current_num_frames):
+                    call_args = params.copy() # Start with user-provided params
+                    if 'magnitude_spectrum' in func_args:
+                        call_args['magnitude_spectrum'] = S_mag[:, i]
+                    if 'frequencies' in func_args:
+                        call_args['frequencies'] = fft_freqs
+                    if 'centroid' in func_args and 'spectral_centroid' in results:
+                         call_args['centroid'] = results['spectral_centroid'][i]
+
+                    # Filter call_args to only include args accepted by func
+                    accepted_args = {k: v for k, v in call_args.items() if k in sig.parameters}
+                    frame_results.append(func(**accepted_args))
+
                 feature_array = np.array(frame_results, dtype=np.float64)
                 feature_result_list.append((feature_name, feature_array))
+
 
             # --- Spectrogram-Based Features ---
             elif feature_name in _SPECTROGRAM_BASED_FEATURES:

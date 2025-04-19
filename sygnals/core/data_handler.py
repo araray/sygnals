@@ -283,10 +283,14 @@ def save_data(
 
         logger.info(f"Data successfully saved to {fpath}")
 
-    except Exception as e:
+    except (ValueError, TypeError) as e: # Catch specific expected errors first
         logger.error(f"Error saving file {fpath}: {e}")
-        # Re-raise exception for upstream handling
-        raise RuntimeError(f"Failed to save data to {fpath}.") from e
+        raise e # Re-raise the original ValueError or TypeError
+    except Exception as e:
+        logger.error(f"Unexpected error saving file {fpath}: {e}")
+        # FIX: Re-raise the original exception instead of wrapping in RuntimeError
+        # This allows tests to catch the specific underlying error (e.g., PermissionError)
+        raise # Re-raise the caught exception 'e'
 
 
 # --- SQL and Filtering ---

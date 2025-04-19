@@ -280,9 +280,10 @@ def test_run_sql_query(sample_filter_df):
     df = sample_filter_df
     query = "SELECT time, value FROM df WHERE channel = 'A' ORDER BY value DESC"
     res = run_sql_query(df, query)
+    # Create expected result without index for comparison
     expected_df = pd.DataFrame({"time": [4, 0, 2], "value": [15, 10, 5]})
-    # Note: Index might not be preserved by pandasql, compare values
-    pd.testing.assert_frame_equal(res, expected_df, check_index=False)
+    # FIX: Reset index on both DataFrames before comparison
+    pd.testing.assert_frame_equal(res.reset_index(drop=True), expected_df.reset_index(drop=True))
 
 def test_run_sql_query_invalid_query(sample_filter_df):
     """Test running an invalid SQL query."""
