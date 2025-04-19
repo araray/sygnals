@@ -20,8 +20,8 @@ from sygnals.plugins.loader import PluginLoader # Import loader
 
 # Import command groups/functions
 from .plugin_cmd import plugin_cmd
-from .segment_cmd import segment_cmd # Import the new segment command group
-# from .augment_cmd import augment_cmd # Will be added later
+from .segment_cmd import segment_cmd
+from .augment_cmd import augment_cmd # Import the new augment command group
 # from .save_cmd import save_cmd # Will be added later
 # from .features_cmd import features_cmd # Will be added later
 
@@ -107,10 +107,11 @@ def hello(ctx):
 main_cli.add_command(plugin_cmd)
 # Add the new segment command group
 main_cli.add_command(segment_cmd)
+# Add the new augment command group
+main_cli.add_command(augment_cmd)
 
 # Add other commands/groups as they are refactored or created
 # main_cli.add_command(features_cmd)
-# main_cli.add_command(augment_cmd)
 # main_cli.add_command(save_cmd)
 # main_cli.add_command(analyze)
 # main_cli.add_command(transform)
