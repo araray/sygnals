@@ -17,6 +17,16 @@ from numpy.typing import NDArray
 from scipy.fft import fft, ifft, fftfreq # Use scipy.fft for basic FFT/IFFT
 from scipy.signal import fftconvolve, get_window, hilbert, correlate, periodogram, welch
 
+# Attempt absolute import for rms_energy at the top level
+try:
+    from sygnals.core.audio.features import rms_energy
+    _RMS_ENERGY_AVAILABLE = True
+except ImportError:
+    _RMS_ENERGY_AVAILABLE = False
+    # Log warning if import fails during module load
+    logging.getLogger(__name__).warning("Could not import rms_energy from sygnals.core.audio.features. RMS envelope calculation will fail.")
+
+
 logger = logging.getLogger(__name__)
 
 # --- FFT-related functions ---
@@ -467,19 +477,13 @@ def amplitude_envelope(
             logger.error(f"Error computing Hilbert envelope: {e}")
             raise
     elif method == 'rms':
+        if not _RMS_ENERGY_AVAILABLE:
+             # Raise error if rms_energy couldn't be imported
+             raise ImportError("rms_energy function not found. Cannot compute RMS envelope.")
         if frame_length is None or hop_length is None:
             raise ValueError("frame_length and hop_length are required for 'rms' envelope method.")
         try:
-            # Use the RMS energy function (potentially from audio features module)
-            # Need to handle potential import location
-            try:
-                 # Attempt import assuming standard structure
-                 from ..audio.features import rms_energy
-            except ImportError:
-                 # Fallback or raise error if structure is different
-                 logger.error("Could not import rms_energy function for RMS envelope. Check module structure.")
-                 raise ImportError("rms_energy function not found for RMS envelope calculation.")
-
+            # Use the imported RMS energy function
             # Note: RMS is related to envelope but not exactly the same as Hilbert envelope.
             # It gives energy per frame, acting as a smoothed, frame-based envelope.
             rms_env = rms_energy(y, frame_length=frame_length, hop_length=hop_length, center=True) # Assume center=True for consistency
