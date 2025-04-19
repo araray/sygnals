@@ -1,214 +1,255 @@
-# tests/test_cli_features.py
+# sygnals/cli/features_cmd.py
 
 """
-Tests for the 'sygnals features' CLI command group, focusing on 'transform scale'.
-Tests for 'features extract' can be added here later.
+CLI commands related to feature extraction and transformation.
 """
 
-import pytest
+import logging
+import click
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from click.testing import CliRunner
-from numpy.testing import assert_allclose # Import assert_allclose
+from typing import Optional, List, Tuple, Any, Dict
 
-# Import the main CLI entry point and the command group/functions to test/mock
-from sygnals.cli.main import cli
-# Import the module to patch, but patch where it's *used*
-# from sygnals.core.ml_utils import scaling # Don't need this for patching target
-from sygnals.core.ml_utils.scaling import _SKLEARN_AVAILABLE # To conditionally skip
+# Import core components
+from sygnals.core.data_handler import read_data, save_data, ReadResult, NDArray # Added NDArray import
+from sygnals.core.features.manager import extract_features # For 'extract' subcommand later
+from sygnals.core.ml_utils.scaling import apply_scaling # For 'transform scale'
+from sygnals.config.models import SygnalsConfig # For accessing config if needed
 
-# --- Test Fixtures ---
+logger = logging.getLogger(__name__)
 
-@pytest.fixture
-def runner() -> CliRunner:
-    """Provides a Click CliRunner instance."""
-    # Capture stderr for checking error messages
-    return CliRunner(mix_stderr=False)
+# --- Main Features Command Group ---
+@click.group("features")
+@click.pass_context
+def features_cmd(ctx):
+    """Extract, transform, and manage signal features."""
+    pass
 
-@pytest.fixture
-def sample_features_csv(tmp_path: Path) -> Path:
-    """Creates a dummy CSV feature file."""
-    df = pd.DataFrame({
-        'time': np.linspace(0, 1, 10),
-        'feat1': np.random.rand(10) * 5 + 10, # Scale 10-15
-        'feat2': np.random.rand(10) * 0.1 - 0.05 # Scale -0.05 to 0.05
-    })
-    csv_path = tmp_path / "features.csv"
-    df.to_csv(csv_path, index=False)
-    return csv_path
+# --- Extract Subcommand (Placeholder/Future) ---
+@features_cmd.command("extract")
+@click.argument("input_file", type=click.Path(exists=True, dir_okay=False, resolve_path=True))
+@click.option("-o", "--output", type=click.Path(resolve_path=True), required=True,
+              help="Output file path for extracted features (e.g., features.csv, features.npz).")
+@click.option("-f", "--feature", "features", multiple=True, required=True,
+              help="Feature(s) to extract (e.g., 'rms_energy', 'mfcc'). Use 'all' for all known features. Can be repeated.")
+@click.option("--frame-length", type=int, default=2048, show_default=True, help="Analysis frame length (samples).")
+@click.option("--hop-length", type=int, default=512, show_default=True, help="Hop length between frames (samples).")
+# Add more options for feature params, output format etc. later
+@click.pass_context
+def features_extract(
+    ctx,
+    input_file: str,
+    output: str,
+    features: Tuple[str], # Click collects multiple options into a tuple
+    frame_length: int,
+    hop_length: int
+):
+    """Extract features from an audio signal."""
+    input_path = Path(input_file)
+    output_path = Path(output)
+    feature_list = list(features) # Convert tuple to list
+    if len(feature_list) == 1 and feature_list[0].lower() == 'all':
+         feature_list = ['all'] # Keep 'all' as a single item list
 
-@pytest.fixture
-def sample_features_npz(tmp_path: Path) -> Path:
-    """Creates a dummy NPZ feature file."""
-    data_dict = {
-        'data': np.random.rand(20, 3) * np.array([[10, 0.1, 100]]), # Different scales
-        'sr': np.array(16000) # Example metadata
-    }
-    npz_path = tmp_path / "features.npz"
-    np.savez(npz_path, **data_dict)
-    return npz_path
+    logger.info(f"Running feature extraction on: {input_path}")
+    logger.info(f"Output file: {output_path}")
+    logger.info(f"Features: {feature_list}")
+    logger.info(f"Params: frame={frame_length}, hop={hop_length}")
 
-@pytest.fixture
-def mock_save_data(mocker):
-    """Mocks the save_data function used by the CLI command."""
-    # Mock save_data where it's called in the CLI module
-    mock = mocker.patch("sygnals.cli.features_cmd.save_data")
-    return mock
+    try:
+        # 1. Read Input Audio
+        data_result: ReadResult = read_data(input_path)
+        if not isinstance(data_result, tuple) or len(data_result) != 2:
+             raise click.UsageError(f"Input file '{input_path.name}' is not recognized as audio.")
+        signal_data, sr = data_result
+        if signal_data.ndim != 1:
+             logger.warning("Input audio is multi-channel. Converting to mono by averaging for feature extraction.")
+             signal_data = np.mean(signal_data, axis=0)
 
-# --- Test Cases for 'features transform scale' ---
-
-@pytest.mark.skipif(not _SKLEARN_AVAILABLE, reason="scikit-learn not installed, skipping scaling tests")
-def test_features_transform_scale_csv_success(runner: CliRunner, sample_features_csv: Path, mock_save_data, mocker):
-    """Test successful scaling of features from a CSV file."""
-    input_file = sample_features_csv
-    output_file = input_file.parent / "scaled_features.csv"
-    scaler_type = 'standard'
-
-    # Mock the core scaling function where it's called in the CLI module
-    # FIX: Correct patch target
-    dummy_scaled_data = np.random.rand(10, 2) # Shape matches numeric columns in CSV
-    mock_apply_scaling = mocker.patch("sygnals.cli.features_cmd.apply_scaling", return_value=(dummy_scaled_data, None)) # Don't care about scaler instance here
-
-    args = [
-        "features", "transform", "scale", str(input_file),
-        "--output", str(output_file),
-        "--scaler", scaler_type
-    ]
-
-    result = runner.invoke(cli, args)
-
-    print("CLI Output:\n", result.output) # For debugging stdout
-    print("CLI Stderr:\n", result.stderr) # For debugging stderr
-    if result.exception: print("Exception:\n", result.exception)
-
-    assert result.exit_code == 0, f"CLI exited with code {result.exit_code}"
-    assert "Successfully scaled features" in result.output
-
-    # Verify apply_scaling was called correctly
-    mock_apply_scaling.assert_called_once()
-    call_args, call_kwargs = mock_apply_scaling.call_args
-    assert call_kwargs.get('scaler_type') == scaler_type
-    assert call_kwargs.get('fit') is True # Default is fit=True
-    # Check input features shape (should be 10 samples, 2 numeric features)
-    assert call_kwargs.get('features').shape == (10, 2)
-
-    # Verify save_data was called correctly
-    mock_save_data.assert_called_once()
-    save_call_args, save_call_kwargs = mock_save_data.call_args
-    saved_data = save_call_args[0]
-    assert isinstance(saved_data, pd.DataFrame) # Should save DataFrame for CSV output
-    assert_allclose(saved_data[['feat1', 'feat2']].values, dummy_scaled_data) # Check scaled data content
-    assert 'time' in saved_data.columns # Check time column preserved
-    assert save_call_args[1] == output_file
+        # Determine output format based on extension
+        output_ext = output_path.suffix.lower()
+        if output_ext == '.csv':
+             output_format = 'dataframe'
+        elif output_ext == '.npz':
+             output_format = 'dict_of_arrays'
+        else:
+             # Default to dataframe and let save_data handle format conversion if possible
+             logger.warning(f"Output format '{output_ext}' not explicitly CSV or NPZ. Defaulting to DataFrame format internally.")
+             output_format = 'dataframe'
 
 
-@pytest.mark.skipif(not _SKLEARN_AVAILABLE, reason="scikit-learn not installed, skipping scaling tests")
-def test_features_transform_scale_npz_success(runner: CliRunner, sample_features_npz: Path, mock_save_data, mocker):
-    """Test successful scaling of features from an NPZ file."""
-    input_file = sample_features_npz
-    output_file = input_file.parent / "scaled_features.npz"
-    scaler_type = 'minmax'
+        # 2. Extract Features using the manager
+        # TODO: Add way to pass feature_params from CLI
+        extracted_data = extract_features(
+            y=signal_data,
+            sr=sr,
+            features=feature_list,
+            frame_length=frame_length,
+            hop_length=hop_length,
+            output_format=output_format # Request format needed for saving
+        )
 
-    # Mock the core scaling function where it's called
-    # FIX: Correct patch target
-    dummy_scaled_data = np.random.rand(20, 3) # Shape matches 'data' array in NPZ
-    mock_apply_scaling = mocker.patch("sygnals.cli.features_cmd.apply_scaling", return_value=(dummy_scaled_data, None))
+        if isinstance(extracted_data, pd.DataFrame) and extracted_data.empty:
+             logger.warning("Feature extraction resulted in empty DataFrame.")
+             click.echo("Warning: No features extracted or signal too short.")
+             return
+        elif isinstance(extracted_data, dict) and not any(k != 'time' for k in extracted_data):
+             logger.warning("Feature extraction resulted in empty dictionary (only time).")
+             click.echo("Warning: No features extracted or signal too short.")
+             return
 
-    args = [
-        "features", "transform", "scale", str(input_file),
-        "--output", str(output_file),
-        "--scaler", scaler_type
-    ]
+        # 3. Save Features
+        save_data(extracted_data, output_path) # Pass DataFrame or Dict directly
 
-    result = runner.invoke(cli, args)
+        click.echo(f"Successfully extracted features from '{input_path.name}' and saved to '{output_path.name}'.")
 
-    print("CLI Output:\n", result.output) # For debugging stdout
-    print("CLI Stderr:\n", result.stderr) # For debugging stderr
-    if result.exception: print("Exception:\n", result.exception)
-
-    assert result.exit_code == 0
-    assert "Successfully scaled features" in result.output
-
-    # Verify apply_scaling was called correctly
-    mock_apply_scaling.assert_called_once()
-    call_args, call_kwargs = mock_apply_scaling.call_args
-    assert call_kwargs.get('scaler_type') == scaler_type
-    assert call_kwargs.get('features').shape == (20, 3) # Check input shape
-
-    # Verify save_data was called correctly
-    mock_save_data.assert_called_once()
-    save_call_args, save_call_kwargs = mock_save_data.call_args
-    saved_data = save_call_args[0]
-    assert isinstance(saved_data, dict) # Should save dict for NPZ output
-    assert 'data' in saved_data # Check original keys preserved/updated
-    assert 'sr' in saved_data
-    assert_allclose(saved_data['data'], dummy_scaled_data) # Check scaled data content
-    assert save_call_args[1] == output_file
+    except FileNotFoundError:
+        raise click.UsageError(f"Input file not found: {input_path}")
+    except ValueError as e:
+        raise click.UsageError(f"Error during feature extraction: {e}")
+    except Exception as e:
+        logger.error(f"An unexpected error occurred during feature extraction: {e}", exc_info=True)
+        raise click.Abort(f"An unexpected error occurred: {e}")
 
 
-def test_features_transform_scale_invalid_input(runner: CliRunner, tmp_path: Path, mocker):
-    """Test scaling with input that cannot be read as features."""
-    # Mock read_data where it's called in the CLI module
-    mock_read = mocker.patch("sygnals.cli.features_cmd.read_data", return_value=(np.zeros(100), 16000))
-    input_file = tmp_path / "input.wav" # Use WAV extension
-    input_file.touch()
-    output_file = tmp_path / "output.csv"
-
-    args = [
-        "features", "transform", "scale", str(input_file),
-        "--output", str(output_file),
-    ]
-
-    result = runner.invoke(cli, args)
-
-    assert result.exit_code != 0
-    # Check stderr for the error message
-    assert "Input file" in result.stderr and "not suitable for feature scaling" in result.stderr
+# --- Transform Subcommand Group ---
+@features_cmd.group("transform")
+@click.pass_context
+def features_transform(ctx):
+    """Transform extracted features (e.g., scaling)."""
+    pass
 
 
-def test_features_transform_scale_no_numeric(runner: CliRunner, tmp_path: Path, mocker):
-    """Test scaling with CSV containing no numeric columns."""
-    df = pd.DataFrame({'text': ['a', 'b', 'c'], 'category': ['X', 'Y', 'X']})
-    input_file = tmp_path / "no_numeric.csv"
-    df.to_csv(input_file, index=False)
-    output_file = tmp_path / "output.csv"
+# --- Transform Scale Subcommand ---
+@features_transform.command("scale")
+@click.argument("input_file", type=click.Path(exists=True, dir_okay=False, resolve_path=True))
+@click.option("-o", "--output", type=click.Path(resolve_path=True), required=True,
+              help="Output file path for scaled features (e.g., features_scaled.csv).")
+@click.option("--scaler", type=click.Choice(['standard', 'minmax', 'robust'], case_sensitive=False),
+              default='standard', show_default=True, help="Type of scaler to apply.")
+# Add options for scaler parameters later if needed (e.g., --with-mean False)
+@click.pass_context
+def transform_scale(ctx, input_file: str, output: str, scaler: str):
+    """Apply scaling (normalization) to feature data."""
+    input_path = Path(input_file)
+    output_path = Path(output)
+    logger.info(f"Running feature scaling on: {input_path}")
+    logger.info(f"Output file: {output_path}")
+    logger.info(f"Scaler type: {scaler}")
 
-    # Mock read_data where it's called in the CLI module
-    mocker.patch("sygnals.cli.features_cmd.read_data", return_value=df)
+    try:
+        # 1. Read Input Features (CSV or NPZ)
+        data_result: ReadResult = read_data(input_path)
 
-    args = [
-        "features", "transform", "scale", str(input_file),
-        "--output", str(output_file),
-    ]
+        feature_matrix: Optional[NDArray[np.float64]] = None
+        original_columns: Optional[List[str]] = None
+        time_index: Optional[pd.Index] = None # Store time index if reading DataFrame
+        data_key: Optional[str] = None # Store key used for NPZ data
 
-    result = runner.invoke(cli, args)
+        if isinstance(data_result, pd.DataFrame):
+             # Assume columns are features, potentially excluding a 'time' column
+             if 'time' in data_result.columns:
+                 feature_df = data_result.drop(columns=['time'])
+                 time_index = data_result.index # Preserve original index if it's time-based
+             elif isinstance(data_result.index, pd.TimedeltaIndex) or isinstance(data_result.index, pd.DatetimeIndex):
+                  feature_df = data_result
+                  time_index = data_result.index
+             else:
+                  feature_df = data_result
+             # Convert to NumPy array, ensuring numeric types
+             try:
+                 numeric_df = feature_df.select_dtypes(include=np.number)
+                 if numeric_df.empty:
+                      raise ValueError("No numeric columns found in the input CSV file for scaling.")
+                 feature_matrix = numeric_df.values.astype(np.float64)
+                 original_columns = numeric_df.columns.tolist()
+             except Exception as e:
+                 raise ValueError(f"Could not convert DataFrame columns to numeric features: {e}")
 
-    assert result.exit_code != 0
-    # Check stderr for the error message
-    assert "No valid numeric feature data found" in result.stderr
+        elif isinstance(data_result, dict):
+             # Assume NPZ: find the main data array (e.g., 'features', 'data')
+             # This logic might need refinement based on how features are saved to NPZ
+             potential_keys = ['features', 'data'] + list(data_result.keys())
+             data_key = None
+             for key in potential_keys:
+                 # Ensure the value is a NumPy array and is numeric
+                 value = data_result.get(key)
+                 if isinstance(value, np.ndarray) and np.issubdtype(value.dtype, np.number):
+                     data_key = key
+                     break
+             if data_key:
+                 feature_matrix = data_result[data_key].astype(np.float64)
+                 # Handle potential 1D array from NPZ
+                 if feature_matrix.ndim == 1:
+                      feature_matrix = feature_matrix.reshape(-1, 1)
+                 elif feature_matrix.ndim != 2:
+                      raise ValueError(f"Feature array '{data_key}' in NPZ must be 1D or 2D, got shape {feature_matrix.shape}")
+                 original_columns = [f"feature_{i}" for i in range(feature_matrix.shape[1])]
+                 logger.info(f"Using array under key '{data_key}' from NPZ file for scaling.")
+             else:
+                 raise ValueError("Could not find a suitable numeric NumPy array in the input NPZ file.")
+        else:
+            raise click.UsageError(f"Input file '{input_path.name}' format not suitable for feature scaling (expected CSV or NPZ with features).")
+
+        if feature_matrix is None or feature_matrix.size == 0:
+             # This condition might be redundant due to checks above, but keep for safety
+             raise ValueError("No valid numeric feature data found in the input file.")
+        # Redundant check as shape is handled above
+        # if feature_matrix.ndim != 2:
+        #      raise ValueError(f"Feature matrix must be 2D (samples/frames x features), got shape {feature_matrix.shape}")
+
+        # 2. Apply Scaling
+        # TODO: Add way to pass scaler_params from CLI
+        # FIX: Explicitly pass fit=True
+        scaled_features, fitted_scaler = apply_scaling(
+            features=feature_matrix,
+            scaler_type=scaler, # type: ignore
+            fit=True # Explicitly fit the scaler
+        )
+        # TODO: Optionally save the fitted scaler instance?
+
+        # 3. Save Scaled Features
+        output_ext = output_path.suffix.lower()
+        if output_ext == '.csv':
+            # Reconstruct DataFrame with original columns and index if possible
+            scaled_df = pd.DataFrame(scaled_features, columns=original_columns, index=time_index)
+            # If time was dropped, add it back if index was time-based
+            if time_index is not None and 'time' not in scaled_df.columns:
+                 # This assumes index is time, might need adjustment
+                 scaled_df.index.name = 'time'
+                 scaled_df = scaled_df.reset_index()
+            save_data(scaled_df, output_path)
+        elif output_ext == '.npz':
+             # Save as NPZ, potentially preserving other arrays from input dict
+             if isinstance(data_result, dict) and data_key is not None:
+                 output_dict = data_result.copy() # Start with original dict
+                 output_dict[data_key] = scaled_features # Overwrite with scaled data
+                 save_data(output_dict, output_path)
+             else: # Original was DataFrame or couldn't identify original dict structure
+                 save_data({'scaled_features': scaled_features}, output_path)
+        else:
+             # Attempt saving as CSV by default if format unknown
+             logger.warning(f"Unsupported output format '{output_ext}' for scaled features. Saving as CSV.")
+             scaled_df = pd.DataFrame(scaled_features, columns=original_columns, index=time_index)
+             if time_index is not None and 'time' not in scaled_df.columns:
+                 scaled_df.index.name = 'time'
+                 scaled_df = scaled_df.reset_index()
+             output_path_csv = output_path.with_suffix('.csv')
+             save_data(scaled_df, output_path_csv)
+             logger.warning(f"Scaled features saved to {output_path_csv} instead.")
 
 
-def test_features_transform_scale_missing_sklearn(runner: CliRunner, sample_features_csv: Path, mocker):
-    """Test scaling command when scikit-learn is not installed."""
-    if _SKLEARN_AVAILABLE:
-        pytest.skip("scikit-learn is installed, skipping this test.")
+        click.echo(f"Successfully scaled features from '{input_path.name}' using '{scaler}' scaler, saved to '{output_path.name}'.")
 
-    input_file = sample_features_csv
-    output_file = input_file.parent / "output.csv"
-    # Mock read_data to avoid file system access if needed, but it should fail later
-    mocker.patch("sygnals.cli.features_cmd.read_data", return_value=pd.read_csv(input_file))
-
-    args = [
-        "features", "transform", "scale", str(input_file),
-        "--output", str(output_file),
-    ]
-
-    result = runner.invoke(cli, args)
-
-    assert result.exit_code != 0
-    # Check stderr for the error message
-    assert "Missing dependency for scaling" in result.stderr
-    assert "scikit-learn" in result.stderr
-
-# TODO: Add tests for 'features extract' when implemented.
+    except FileNotFoundError:
+        raise click.UsageError(f"Input file not found: {input_path}")
+    except ValueError as e:
+        # Catch value errors from reading/processing
+        raise click.UsageError(f"Error during feature scaling: {e}")
+    except ImportError as e:
+         # Catch missing scikit-learn
+         raise click.UsageError(f"Missing dependency for scaling: {e}. Try `pip install scikit-learn`.")
+    except Exception as e:
+        logger.error(f"An unexpected error occurred during feature scaling: {e}", exc_info=True)
+        raise click.Abort(f"An unexpected error occurred: {e}")
