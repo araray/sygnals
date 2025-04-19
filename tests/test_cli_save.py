@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional, Union, Literal, Dict, Any, Tuple
 from numpy.testing import assert_allclose # FIX: Import assert_allclose
 import logging # Import logging for caplog
+import click # Import click for exception checking
 
 from click.testing import CliRunner
 
@@ -183,13 +184,15 @@ def test_save_dataset_invalid_input(runner: CliRunner, tmp_path: Path, mocker):
         "--output", str(output_file),
     ]
 
-    result = runner.invoke(cli, args)
+    result = runner.invoke(cli, args, catch_exceptions=False) # Catch exceptions
 
     print("CLI Output:\n", result.output) # For debugging stdout
     print("CLI Stderr:\n", result.stderr) # For debugging stderr
     if result.exception: print("Exception:\n", result.exception)
 
     assert result.exit_code != 0
-    # Check stderr or exception message for the error
-    assert result.exception is not None
-    assert "Error during dataset saving" in str(result.exception) or "Cannot read this" in str(result.exception)
+    # FIX: Check the original exception type and message using exc_info
+    assert result.exc_info is not None
+    exc_type, exc_value, _ = result.exc_info
+    assert issubclass(exc_type, click.exceptions.Abort) # Abort wraps UsageError
+    assert "Error during dataset saving" in str(exc_value) or "Cannot read this" in str(exc_value)
