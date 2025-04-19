@@ -39,19 +39,16 @@ _AVAILABLE_FEATURES_DICT = {**TIME_DOMAIN_FEATURES}
 # Add frame-based audio features
 _AVAILABLE_FEATURES_DICT["zero_crossing_rate"] = zero_crossing_rate
 _AVAILABLE_FEATURES_DICT["rms_energy"] = rms_energy
-# Add frequency-domain features (that operate per-frame on spectrum)
-_AVAILABLE_FEATURES_DICT.update(FREQUENCY_DOMAIN_FEATURES)
-# Add placeholder audio features
+# Add placeholder audio features (treated as frame-based for now)
 _AVAILABLE_FEATURES_DICT["hnr"] = harmonic_to_noise_ratio
 _AVAILABLE_FEATURES_DICT["jitter"] = jitter
 _AVAILABLE_FEATURES_DICT["shimmer"] = shimmer
-# Add cepstral features (MFCC handled specially below)
-# _AVAILABLE_FEATURES_DICT.update(CEPSTRAL_FEATURES) # MFCC needs special handling
+# DO NOT add FREQUENCY_DOMAIN_FEATURES here - they need special handling below
 
 # List features requiring special handling (e.g., operate on full spectrogram or signal)
 _SPECIAL_HANDLING_FEATURES = {"mfcc", "spectral_contrast"}
-# Add placeholders here if they need signal-level calculation later, but for now treat as frame-based
-# _PLACEHOLDER_FEATURES = {"hnr", "jitter", "shimmer"}
+# Add frequency domain features here if they need specific handling different from time-domain
+# For now, they are handled in their own elif block below.
 
 
 class FeatureExtractionError(Exception):
@@ -113,13 +110,15 @@ def extract_features(
     # --- Handle 'all' features request ---
     if features == ['all']:
         # Combine standard features and special handling ones
-        features = list(_AVAILABLE_FEATURES_DICT.keys()) + list(_SPECIAL_HANDLING_FEATURES)
-        # Remove duplicates if any feature exists in both
+        # Include FREQUENCY_DOMAIN_FEATURES keys here for 'all'
+        features = list(_AVAILABLE_FEATURES_DICT.keys()) + list(FREQUENCY_DOMAIN_FEATURES.keys()) + list(_SPECIAL_HANDLING_FEATURES)
+        # Remove duplicates if any feature exists in multiple places
         features = sorted(list(set(features)))
         logger.info(f"Extracting all available features: {features}")
 
     # --- Input Validation ---
-    all_known_features = set(_AVAILABLE_FEATURES_DICT.keys()) | _SPECIAL_HANDLING_FEATURES
+    # Update known features to include frequency domain ones
+    all_known_features = set(_AVAILABLE_FEATURES_DICT.keys()) | set(FREQUENCY_DOMAIN_FEATURES.keys()) | _SPECIAL_HANDLING_FEATURES
     unknown_features = [f for f in features if f not in all_known_features]
     if unknown_features:
         raise ValueError(f"Unknown feature(s) requested: {unknown_features}. Available: {sorted(list(all_known_features))}")
@@ -133,7 +132,11 @@ def extract_features(
         if center:
             # Pad signal for centering before framing if needed by time-domain funcs
             pad_width = frame_length // 2
-            y_padded = np.pad(y, pad_width, mode='constant') # Pad with zeros for framing
+            # Pad only if signal length is sufficient, avoid excessive padding on short signals
+            if len(y) > pad_width * 2:
+                 y_padded = np.pad(y, pad_width, mode='constant') # Pad with zeros for framing
+            else:
+                 y_padded = y # Avoid padding if signal is too short
             frames = librosa.util.frame(y_padded, frame_length=frame_length, hop_length=hop_length)
         else:
             frames = librosa.util.frame(y, frame_length=frame_length, hop_length=hop_length)
@@ -149,12 +152,9 @@ def extract_features(
 
     # Calculate frame times (center times of frames)
     # Use n_fft=frame_length as reference for time calculation if centering
-    frame_times = librosa.times_like(frames[0], sr=sr, hop_length=hop_length, n_fft=frame_length if center else None)
-    # Ensure frame_times has the correct length matching num_frames
-    if len(frame_times) != num_frames:
-         logger.warning(f"Mismatch between number of frames ({num_frames}) and calculated frame times ({len(frame_times)}). Adjusting times array.")
-         # This can happen with certain edge padding cases, adjust times array length
-         frame_times = frame_times[:num_frames] # Simple truncation, might need refinement
+    # Use librosa.frames_to_time for consistency with librosa features
+    frame_indices = np.arange(num_frames)
+    frame_times = librosa.frames_to_time(frame_indices, sr=sr, hop_length=hop_length, n_fft=frame_length if center else None)
 
     # --- Pre-calculate Spectrograms if needed ---
     S_mag: Optional[NDArray[np.float64]] = None
@@ -179,11 +179,12 @@ def extract_features(
                 window=window,
                 center=center,
             )
-            # Ensure STFT result has expected number of frames
-            if stft_result.shape[1] != num_frames:
-                 logger.warning(f"STFT frames ({stft_result.shape[1]}) mismatch framing ({num_frames}). Using STFT frame count.")
-                 num_frames = stft_result.shape[1] # Adjust frame count based on STFT result
-                 frame_times = frame_times[:num_frames] # Adjust times accordingly
+            # Ensure STFT result has expected number of frames consistent with frame_times
+            stft_num_frames = stft_result.shape[1]
+            if stft_num_frames != len(frame_times):
+                 logger.warning(f"STFT frames ({stft_num_frames}) mismatch calculated frame times ({len(frame_times)}). Using STFT frame count and recalculating times.")
+                 num_frames = stft_num_frames # Adjust frame count based on STFT result
+                 frame_times = librosa.frames_to_time(np.arange(num_frames), sr=sr, hop_length=hop_length, n_fft=frame_length if center else None) # Recalculate times
 
             S_mag = np.abs(stft_result) # Magnitude spectrogram (n_freq_bins, n_frames)
             fft_freqs = librosa.fft_frequencies(sr=sr, n_fft=frame_length) # Frequencies for STFT bins
@@ -224,14 +225,15 @@ def extract_features(
         params = feature_params.get(feature_name, {})
 
         try:
-            # --- Handle frame-based features (Time, ZCR, RMS, Placeholders) ---
-            # Check if feature is in the main dictionary (includes time-domain, basic audio, placeholders)
+            # --- Handle frame-based features (Time Domain, ZCR, RMS, Placeholders) ---
+            # Check if feature is in the main dictionary (_AVAILABLE_FEATURES_DICT)
             if feature_name in _AVAILABLE_FEATURES_DICT:
                 func = _AVAILABLE_FEATURES_DICT[feature_name]
                 # Features calculated by librosa over the whole signal (ZCR, RMS, Placeholders)
                 # These functions handle their own framing based on provided args
                 if feature_name in ["zero_crossing_rate", "rms_energy", "hnr", "jitter", "shimmer"]:
                      # Pass necessary framing parameters if the function needs them
+                     # DO NOT pass sr here, as these functions don't expect it
                      func_params = {
                          'frame_length': frame_length,
                          'hop_length': hop_length,
@@ -242,7 +244,8 @@ def extract_features(
                      # if feature_name == 'jitter' and 'f0' in results: # Example dependency
                      #     func_params['f0'] = results['f0']
 
-                     feature_result = func(y=y, sr=sr, **func_params)
+                     # Pass y (original signal) to these functions
+                     feature_result = func(y=y, **func_params)
                      # Ensure result length matches num_frames derived from STFT/framing
                      if len(feature_result) != num_frames:
                           logger.warning(f"Length mismatch for {feature_name} ({len(feature_result)} vs {num_frames}). Adjusting.")
@@ -256,11 +259,16 @@ def extract_features(
                      results[feature_name] = feature_result
                 else:
                     # Apply other time-domain features frame-by-frame using our pre-calculated frames
+                    # Ensure 'frames' has the correct number of columns matching num_frames
+                    if frames.shape[1] != num_frames:
+                         logger.error(f"Frame array columns ({frames.shape[1]}) mismatch expected num_frames ({num_frames}) for time-domain feature '{feature_name}'. Skipping.")
+                         continue # Skip this feature if frame count is inconsistent
                     feature_result = np.array([func(frames[:, i], **params) for i in range(num_frames)])
                     results[feature_name] = feature_result
                 processed_features.add(feature_name)
 
             # --- Handle frequency-domain features (operating on single frame spectrum) ---
+            # Use elif here to ensure features are not processed by both blocks
             elif feature_name in FREQUENCY_DOMAIN_FEATURES:
                 if S_mag is None or fft_freqs is None:
                     # This should not happen if logic above is correct, but check defensively
@@ -273,8 +281,8 @@ def extract_features(
 
             # --- Handle spectral_contrast (operates on full spectrogram) ---
             elif feature_name == "spectral_contrast":
-                 if S_mag is None:
-                     raise FeatureExtractionError(f"FFT magnitude spectrum 'S_mag' not available for feature '{feature_name}'")
+                 if S_mag is None or fft_freqs is None: # Also need fft_freqs
+                     raise FeatureExtractionError(f"FFT magnitude spectrum 'S_mag' or 'fft_freqs' not available for feature '{feature_name}'")
                  # Needs full magnitude spectrogram S, sr, and freqs
                  feature_result = spectral_contrast(S=S_mag, sr=sr, freqs=fft_freqs, **params)
                  # Result shape (n_bands+1, time), store each band as separate feature
