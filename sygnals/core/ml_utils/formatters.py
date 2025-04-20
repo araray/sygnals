@@ -14,6 +14,7 @@ from numpy.typing import NDArray
 from typing import Union, List, Dict, Optional, Any, Literal, Tuple, Callable
 # Import zoom for image resizing
 from scipy.ndimage import zoom
+import warnings # Import the warnings module
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +84,8 @@ def format_feature_vectors_per_segment(
 
     Raises:
         ValueError: If input dictionary is empty, feature lengths mismatch,
-                    segment indices are invalid, aggregation method is unknown,
+                    segment indices are invalid (but handled with warning),
+                    aggregation method is unknown,
                     or segment_labels length mismatches segment_indices length.
     """
     if not features_dict:
@@ -133,8 +135,14 @@ def format_feature_vectors_per_segment(
     # Aggregate features for each segment
     for i, (start_frame, end_frame) in enumerate(segment_indices):
         # Validate segment indices
-        if not (0 <= start_frame < num_frames and start_frame < end_frame <= num_frames):
-            logger.warning(f"Invalid segment indices ({start_frame}, {end_frame}) for num_frames={num_frames}. Skipping segment {i}.")
+        # FIX: Changed condition to check start < end
+        if not (0 <= start_frame < num_frames and start_frame < end_frame and end_frame <= num_frames):
+            warning_msg = (f"Invalid segment indices ({start_frame}, {end_frame}) for num_frames={num_frames}. "
+                           f"Skipping segment {i}.")
+            logger.warning(warning_msg)
+            # --- FIX: Emit UserWarning ---
+            warnings.warn(warning_msg, UserWarning, stacklevel=2)
+            # --- End Fix ---
             continue # Skip invalid segment, result will have NaN row
 
         for j, feat_name in enumerate(feature_names):
