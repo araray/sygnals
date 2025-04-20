@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from typing import Optional, Union, Literal, Dict, Any, Tuple
-from numpy.testing import assert_allclose # FIX: Import assert_allclose
+from numpy.testing import assert_allclose
 import logging # Import logging for caplog
 import click # Import click for exception checking
 
@@ -73,6 +73,7 @@ def test_save_dataset_assembly_none(runner: CliRunner, sample_input_data: Tuple[
     if result.exception: print("Exception:\n", result.exception)
 
     assert result.exit_code == 0, f"CLI exited with code {result.exit_code}"
+    assert result.exception is None # Success case
     assert "Successfully saved dataset" in result.output
     assert f"(assembly: {assembly})" in result.output
 
@@ -90,7 +91,6 @@ def test_save_dataset_assembly_none(runner: CliRunner, sample_input_data: Tuple[
         assert isinstance(saved_data, dict)
         assert saved_data.keys() == expected_data.keys()
         for key in expected_data:
-            # Use the imported assert_allclose
             assert_allclose(saved_data[key], expected_data[key])
 
     assert saved_path == output_file
@@ -116,9 +116,8 @@ def test_save_dataset_format_override(runner: CliRunner, sample_input_data: Tupl
     if result.exception: print("Exception:\n", result.exception)
 
     assert result.exit_code == 0
+    assert result.exception is None
     assert "Successfully saved dataset" in result.output
-    # FIX: Remove assertion checking for log message in stdout
-    # assert f"Output format overridden to: '{override_format}'" in result.output # Check log/output message
 
     # Verify save_data was called with the correct overridden path
     mock_save_data.assert_called_once()
@@ -126,7 +125,6 @@ def test_save_dataset_format_override(runner: CliRunner, sample_input_data: Tupl
     assert save_call_args[1] == expected_output_file
 
 
-# FIX: Add caplog fixture to capture logs
 @pytest.mark.parametrize("assembly_method", ["vectors", "sequences", "image"])
 def test_save_dataset_placeholders(runner: CliRunner, sample_input_data: Tuple[Path, Any], mock_save_data, assembly_method: str, caplog):
     """Test placeholder assembly methods ('vectors', 'sequences', 'image')."""
@@ -149,8 +147,9 @@ def test_save_dataset_placeholders(runner: CliRunner, sample_input_data: Tuple[P
     if result.exception: print("Exception:\n", result.exception)
 
     assert result.exit_code == 0
+    assert result.exception is None
     assert "Successfully saved dataset" in result.output
-    # FIX: Check caplog.text for the warning message
+    # Check caplog.text for the warning message
     assert "not yet implemented" in caplog.text
 
     # Verify save_data was still called (passing through original data for now)
@@ -166,7 +165,6 @@ def test_save_dataset_placeholders(runner: CliRunner, sample_input_data: Tuple[P
         assert isinstance(saved_data, dict)
         assert saved_data.keys() == expected_data.keys()
         for key in expected_data:
-            # Use the imported assert_allclose
             assert_allclose(saved_data[key], expected_data[key])
     assert saved_path == output_file
 
@@ -184,15 +182,17 @@ def test_save_dataset_invalid_input(runner: CliRunner, tmp_path: Path, mocker):
         "--output", str(output_file),
     ]
 
-    result = runner.invoke(cli, args, catch_exceptions=False) # Catch exceptions
+    # Invoke WITHOUT catch_exceptions=False (use default True)
+    result = runner.invoke(cli, args)
 
     print("CLI Output:\n", result.output) # For debugging stdout
     print("CLI Stderr:\n", result.stderr) # For debugging stderr
     if result.exception: print("Exception:\n", result.exception)
 
     assert result.exit_code != 0
-    # FIX: Check the original exception type and message using exc_info
-    assert result.exc_info is not None
-    exc_type, exc_value, _ = result.exc_info
-    assert issubclass(exc_type, click.exceptions.Abort) # Abort wraps UsageError
-    assert "Error during dataset saving" in str(exc_value) or "Cannot read this" in str(exc_value)
+    # *** FIX: Check that the caught exception is SystemExit ***
+    assert result.exception is not None, f"Expected an exception, but got None. Output:\n{result.output}\nStderr:\n{result.stderr}"
+    assert isinstance(result.exception, SystemExit), f"Expected SystemExit, got {type(result.exception)}"
+    assert result.exception.code != 0 # Check exit code associated with SystemExit
+    # Check stderr for the UsageError message printed by ConfigGroup's handler
+    assert "Error: Error during dataset saving: Cannot read this" in result.stderr
