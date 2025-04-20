@@ -176,7 +176,7 @@ def extract_features(
 
     def get_fft_magnitude_and_freqs() -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
         """Calculates and caches STFT magnitude and frequencies."""
-        nonlocal _S_mag, _fft_freqs
+        nonlocal _S_mag, _fft_freqs, num_frames, frame_times # Allow modification
         if _S_mag is None or _fft_freqs is None:
             logger.debug("Calculating STFT magnitude and FFT frequencies...")
             try:
@@ -190,11 +190,10 @@ def extract_features(
                 if stft_num_frames != num_frames:
                     logger.warning(f"STFT frames ({stft_num_frames}) mismatch calculated frame times ({num_frames}). "
                                    f"Adjusting frame count and times to match STFT output.")
-                    nonlocal frame_times # Allow modification of outer scope variable
+                    # Recalculate frame times based on actual STFT output
                     frame_times = librosa.times_like(stft_result, sr=sr, hop_length=hop_length, n_fft=frame_length)
                     results['time'] = frame_times.astype(np.float64) # Update times in results dict
-                    # Update num_frames globally within this function if needed elsewhere?
-                    # For now, subsequent loops will use stft_num_frames implicitly via S_mag shape
+                    num_frames = stft_num_frames # Update num_frames based on actual STFT
 
                 _S_mag = np.abs(stft_result).astype(np.float64)
                 _fft_freqs = librosa.fft_frequencies(sr=sr, n_fft=frame_length).astype(np.float64)
@@ -242,33 +241,33 @@ def extract_features(
             # --- Frame-Based Features ---
             if feature_name in _FRAME_BASED_FEATURES:
                 func = _FRAME_BASED_FEATURES[feature_name]
+                sig = inspect.signature(func)
+                func_params_available = {
+                     'y': y,
+                     'sr': sr,
+                     'frame_length': frame_length,
+                     'hop_length': hop_length,
+                     'center': center,
+                     **params # Add feature-specific params from user
+                 }
+
+                # Filter available params based on function signature
+                call_kwargs = {k: v for k, v in func_params_available.items() if k in sig.parameters}
+
                 # Features calculated by librosa over the whole signal (ZCR, RMS) or placeholders
                 if feature_name in ["zero_crossing_rate", "rms_energy", "hnr", "jitter", "shimmer"]:
-                     func_params = {
-                         'frame_length': frame_length,
-                         'hop_length': hop_length,
-                         'center': center,
-                         **params # Add feature-specific params
-                     }
-                     # Pass relevant context (y, sr) if needed
-                     if feature_name in ["hnr", "jitter", "shimmer"]:
-                         func_params['sr'] = sr
-                         feature_array = func(y=y, **func_params)
-                     elif feature_name in ["zero_crossing_rate", "rms_energy"]:
-                         feature_array = func(y=y, **func_params)
-                     else: # Should not happen
-                          logger.error(f"Internal logic error: Unhandled feature '{feature_name}' in frame-based block.")
-                          continue
+                     # Ensure 'y' is passed if required by signature (most likely)
+                     if 'y' not in call_kwargs and 'y' in sig.parameters:
+                          call_kwargs['y'] = y # Add y if func expects it but wasn't in filtered params (unlikely)
+                     feature_array = func(**call_kwargs)
                      feature_result_list.append((feature_name, feature_array))
 
                 else: # Custom time-domain features applied frame-by-frame
                     logger.debug(f"Applying time-domain feature '{feature_name}' frame-by-frame.")
                     # Generate frames using librosa.util.frame
-                    # Note: This framing might differ slightly from librosa's internal framing for ZCR/RMS
                     if center:
-                        # Pad signal symmetrically for centered frames
                         pad_width = frame_length // 2
-                        y_padded = np.pad(y, pad_width, mode='constant') # Default pad is 0
+                        y_padded = np.pad(y, pad_width, mode='constant')
                         y_framed = librosa.util.frame(y_padded, frame_length=frame_length, hop_length=hop_length)
                     else:
                         y_framed = librosa.util.frame(y, frame_length=frame_length, hop_length=hop_length)
@@ -277,12 +276,12 @@ def extract_features(
                     if y_framed.shape[1] != current_num_frames:
                          logger.warning(f"Manual frame count ({y_framed.shape[1]}) for '{feature_name}' mismatch "
                                         f"expected ({current_num_frames}). Adjusting frames.")
-                         # Adjust if necessary (e.g., trim extra frames)
                          if y_framed.shape[1] > current_num_frames:
                              y_framed = y_framed[:, :current_num_frames]
-                         # Padding is complex if too few frames, might indicate upstream issue
 
-                    frame_results = [func(y_framed[:, i], **params) for i in range(y_framed.shape[1])]
+                    # Prepare args for frame-based function (expects 'frame')
+                    frame_call_kwargs = {k: v for k, v in params.items() if k in sig.parameters} # User params only
+                    frame_results = [func(frame=y_framed[:, i], **frame_call_kwargs) for i in range(y_framed.shape[1])]
                     feature_array = np.array(frame_results, dtype=np.float64)
                     feature_result_list.append((feature_name, feature_array))
 
@@ -291,60 +290,49 @@ def extract_features(
                 S_mag, fft_freqs = get_fft_magnitude_and_freqs()
                 current_num_frames = S_mag.shape[1] # Update frame count based on actual STFT
                 func = _SPECTRUM_BASED_FEATURES[feature_name]
-                # Apply frame-by-frame (column-by-column of S_mag)
-                # FIX: Check function signature and pass only required args
                 sig = inspect.signature(func)
-                func_args = {}
-                if 'magnitude_spectrum' in sig.parameters:
-                    func_args['magnitude_spectrum'] = None # Placeholder, filled in loop
-                if 'frequencies' in sig.parameters:
-                    func_args['frequencies'] = fft_freqs
-                if 'centroid' in sig.parameters: # Handle centroid dependency for bandwidth
-                    # Ensure centroid is calculated first if needed
-                    if 'spectral_centroid' not in results:
-                         logger.warning(f"Feature '{feature_name}' requires 'spectral_centroid', calculating it first.")
-                         # This recursive call is complex, better to handle dependencies explicitly
-                         # For now, just calculate it if needed by bandwidth
-                         if feature_name == 'spectral_bandwidth':
-                              centroid_results = [
-                                  _SPECTRUM_BASED_FEATURES['spectral_centroid'](S_mag[:, i], fft_freqs)
-                                  for i in range(current_num_frames)
-                              ]
-                              results['spectral_centroid'] = np.array(centroid_results, dtype=np.float64)
-                         else:
-                              # If another feature needs centroid, log warning or raise error
-                              logger.warning(f"Feature '{feature_name}' needs 'spectral_centroid' but it wasn't requested or calculated yet.")
-                              # Skip this feature if centroid is missing?
-                              # continue
-                    # Add centroid to func_args if available
-                    if 'spectral_centroid' in results:
-                         func_args['centroid'] = None # Placeholder, filled in loop
+
+                # Handle centroid dependency for bandwidth
+                if feature_name == 'spectral_bandwidth' and 'centroid' in sig.parameters and 'spectral_centroid' not in results:
+                    logger.warning("Feature 'spectral_bandwidth' requires 'spectral_centroid', calculating it first.")
+                    centroid_func = _SPECTRUM_BASED_FEATURES['spectral_centroid']
+                    centroid_results = [centroid_func(S_mag[:, i], fft_freqs) for i in range(current_num_frames)]
+                    results['spectral_centroid'] = np.array(centroid_results, dtype=np.float64)
+                    processed_feature_names.add('spectral_centroid') # Mark as processed
 
                 frame_results = []
                 for i in range(current_num_frames):
-                    call_args = params.copy() # Start with user-provided params
-                    if 'magnitude_spectrum' in func_args:
-                        call_args['magnitude_spectrum'] = S_mag[:, i]
-                    if 'frequencies' in func_args:
-                        call_args['frequencies'] = fft_freqs
-                    if 'centroid' in func_args and 'spectral_centroid' in results:
-                         call_args['centroid'] = results['spectral_centroid'][i]
+                    # Prepare args for this frame
+                    frame_call_kwargs = params.copy() # Start with user params
+                    if 'magnitude_spectrum' in sig.parameters:
+                        frame_call_kwargs['magnitude_spectrum'] = S_mag[:, i]
+                    if 'frequencies' in sig.parameters:
+                        frame_call_kwargs['frequencies'] = fft_freqs
+                    if 'centroid' in sig.parameters and 'spectral_centroid' in results:
+                        frame_call_kwargs['centroid'] = results['spectral_centroid'][i]
 
-                    # Filter call_args to only include args accepted by func
-                    accepted_args = {k: v for k, v in call_args.items() if k in sig.parameters}
+                    # Filter to only include args accepted by func
+                    accepted_args = {k: v for k, v in frame_call_kwargs.items() if k in sig.parameters}
                     frame_results.append(func(**accepted_args))
 
                 feature_array = np.array(frame_results, dtype=np.float64)
                 feature_result_list.append((feature_name, feature_array))
-
 
             # --- Spectrogram-Based Features ---
             elif feature_name in _SPECTROGRAM_BASED_FEATURES:
                 S_mag, fft_freqs = get_fft_magnitude_and_freqs()
                 current_num_frames = S_mag.shape[1] # Update frame count
                 func = _SPECTROGRAM_BASED_FEATURES[feature_name]
-                # Pass the full spectrogram S
-                feature_output = func(S=S_mag, sr=sr, freqs=fft_freqs, **params)
+                sig = inspect.signature(func)
+                # Prepare args, passing S and sr if needed
+                call_kwargs = params.copy()
+                if 'S' in sig.parameters: call_kwargs['S'] = S_mag
+                if 'sr' in sig.parameters: call_kwargs['sr'] = sr
+                if 'freqs' in sig.parameters: call_kwargs['freqs'] = fft_freqs
+                # Filter to accepted args
+                accepted_args = {k: v for k, v in call_kwargs.items() if k in sig.parameters}
+                feature_output = func(**accepted_args)
+
                 # Handle multi-band output (like spectral_contrast)
                 if feature_name == "spectral_contrast":
                     n_bands_contrast = feature_output.shape[0] - 1
@@ -361,12 +349,18 @@ def extract_features(
                 S_mel_log = get_log_mel_spectrogram()
                 current_num_frames = S_mel_log.shape[1] # Update frame count
                 func = _MELSPEC_BASED_FEATURES[feature_name]
+                sig = inspect.signature(func)
                 # Get specific params, merge with general framing params if needed by func
-                mfcc_params = feature_params.get('mfcc', {})
-                mfcc_params.setdefault('n_fft', frame_length) # Ensure defaults are available if needed by librosa
-                mfcc_params.setdefault('hop_length', hop_length)
-                # Call the function (e.g., mfcc)
-                feature_output = func(S=S_mel_log, sr=sr, **mfcc_params) # Pass sr just in case
+                call_kwargs = feature_params.get(feature_name, {}).copy()
+                if 'S' in sig.parameters: call_kwargs['S'] = S_mel_log
+                if 'sr' in sig.parameters: call_kwargs['sr'] = sr
+                # Ensure defaults are available if mfcc needs them internally
+                call_kwargs.setdefault('n_fft', frame_length)
+                call_kwargs.setdefault('hop_length', hop_length)
+                # Filter to accepted args
+                accepted_args = {k: v for k, v in call_kwargs.items() if k in sig.parameters}
+                feature_output = func(**accepted_args)
+
                 # Handle multi-coefficient output (like MFCC)
                 if feature_name == "mfcc":
                     n_coeffs = feature_output.shape[0]
@@ -413,7 +407,11 @@ def extract_features(
     final_results = {'time': results['time']}
     for name, arr in results.items():
         if name == 'time': continue # Already added
-        if name in processed_feature_names:
+        # Check if the feature name (or its base if derived, e.g. mfcc_0 from mfcc) was intended to be processed
+        base_name = name.split('_')[0] # Simple way to get base name (e.g., 'mfcc' from 'mfcc_0')
+        original_requested_feature = base_name if base_name in _ALL_KNOWN_FEATURES else name
+
+        if original_requested_feature in processed_feature_names:
             if isinstance(arr, np.ndarray) and arr.ndim == 1:
                 if len(arr) == final_num_frames:
                     final_results[name] = arr

@@ -5,7 +5,7 @@ sygnals_test="${1:-.}"
 source venv/bin/activate
 
 {
-    python -m pytest -l ${sygnals_test} 2>&1
+    python -m pytest --disable-warning -l ${sygnals_test} 2>&1
 } | tee -a /av/outputs/sygnals_tests_run_$(date +'%s').txt
 
 deactivate
