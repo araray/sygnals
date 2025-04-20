@@ -8,6 +8,7 @@ import pytest
 import numpy as np
 import pandas as pd
 from numpy.testing import assert_allclose, assert_equal, assert_array_equal
+from numpy.typing import NDArray
 from typing import Dict, List, Tuple, Any # Added List, Tuple, Any
 
 # Import functions/classes to test
