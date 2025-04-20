@@ -14,6 +14,7 @@ import numpy as np
 from numpy.typing import NDArray
 # Import necessary types
 from typing import Optional, Dict, Any, Tuple, Literal, Union
+import warnings # Import warnings for placeholder features
 
 logger = logging.getLogger(__name__)
 
@@ -256,6 +257,7 @@ def harmonic_to_noise_ratio(
         percussive energy is zero for a frame. Length matches the number of frames
         produced by the internal STFT of HPSS.
     """
+    warnings.warn("harmonic_to_noise_ratio feature is an approximation based on HPSS energy ratio.", UserWarning, stacklevel=2)
     logger.warning("harmonic_to_noise_ratio feature is an approximation based on HPSS energy ratio.")
     if y.ndim != 1:
         raise ValueError("Input audio 'y' must be 1D for HPSS-based HNR.")
@@ -356,6 +358,7 @@ def jitter(
         Returns NaN for unvoiced frames or frames where jitter cannot be calculated
         (e.g., start of a voiced segment, F0 out of range).
     """
+    warnings.warn("Jitter feature is an approximation based on frame-level F0 period differences.", UserWarning, stacklevel=2)
     logger.warning("Jitter feature is an approximation based on frame-level F0 period differences.")
     if method != 'local_abs':
         raise NotImplementedError(f"Jitter method '{method}' not implemented. Only 'local_abs' is available.")
@@ -389,8 +392,15 @@ def jitter(
     # So, jitter_values[i] corresponds to period_diffs[i-1]
     # Assign NaN to the first frame and any frame where the diff is NaN
     jitter_values[1:] = period_diffs
+
     # Ensure NaN remains where diff calculation was invalid
-    jitter_values[~np.isfinite(period_diffs)] = np.nan
+    # FIX: Apply boolean mask only to the slice where period_diffs applies
+    # Create mask for the diffs array
+    invalid_diff_mask = ~np.isfinite(period_diffs)
+    # Apply this mask to the corresponding part of jitter_values (from index 1 onwards)
+    jitter_values[1:][invalid_diff_mask] = np.nan
+    # --- End Fix ---
+
     # Explicitly set NaN for the first frame and unvoiced frames
     jitter_values[0] = np.nan
     jitter_values[voiced_flag <= 0.5] = np.nan # Also NaN for originally unvoiced
@@ -436,6 +446,7 @@ def shimmer(
         Returns NaN for unvoiced frames or frames where shimmer cannot be calculated
         (e.g., start of a voiced segment).
     """
+    warnings.warn("Shimmer feature is an approximation based on frame-level relative RMS differences.", UserWarning, stacklevel=2)
     logger.warning("Shimmer feature is an approximation based on frame-level relative RMS differences.")
     if y.ndim != 1:
         raise ValueError("Input audio 'y' must be 1D for shimmer calculation.")
