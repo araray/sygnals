@@ -5,7 +5,7 @@ sygnals_test="${1:-.}"
 source venv/bin/activate
 
 {
-    python -m pytest "${sygnals_test}" 2>&1
-} | tee -a /av/outputs/sygnals_run_$(date +'%s').txt
+    python -m pytest -l ${sygnals_test} 2>&1
+} | tee -a /av/outputs/sygnals_tests_run_$(date +'%s').txt
 
 deactivate
