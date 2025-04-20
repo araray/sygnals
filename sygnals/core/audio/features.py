@@ -13,7 +13,7 @@ import librosa
 import numpy as np
 from numpy.typing import NDArray
 # Import necessary types
-from typing import Optional, Dict, Any, Tuple, Literal
+from typing import Optional, Dict, Any, Tuple, Literal, Union
 
 logger = logging.getLogger(__name__)
 
