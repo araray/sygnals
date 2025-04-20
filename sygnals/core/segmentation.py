@@ -13,6 +13,7 @@ from numpy.typing import NDArray # Import NDArray
 # Import necessary types
 from typing import List, Tuple, Optional, Literal, Union, Dict, Any
 import librosa # Used for framing and potentially event detection
+import warnings # Import warnings module
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +124,8 @@ def segment_by_silence(
     min_silence_duration_sec: float = 0.1,
     min_segment_duration_sec: float = 0.2,
     padding_sec: float = 0.05,
-    frame_length: int = 1024, # Frame length for RMS calculation
+    # FIX: Changed default frame_length from 1024 to 512 for potentially better resolution
+    frame_length: int = 512, # Frame length for RMS calculation
     hop_length: Optional[int] = None # Hop length for RMS calculation
 ) -> List[Tuple[int, int]]:
     """
@@ -143,7 +145,7 @@ def segment_by_silence(
                                  to be kept. (Default: 0.2)
         padding_sec: Amount of padding (in seconds) to add to the beginning and end
                      of each detected non-silent segment. (Default: 0.05)
-        frame_length: Frame length (samples) for RMS energy calculation. (Default: 1024)
+        frame_length: Frame length (samples) for RMS energy calculation. (Default: 512)
         hop_length: Hop length (samples) for RMS energy calculation. Defaults to frame_length // 4.
 
     Returns:
@@ -165,7 +167,7 @@ def segment_by_silence(
          raise ValueError("Hop length must be positive.")
 
     logger.info(f"Segmenting by silence: threshold={threshold_db}dB, min_silence={min_silence_duration_sec}s, "
-                f"min_segment={min_segment_duration_sec}s, padding={padding_sec}s")
+                f"min_segment={min_segment_duration_sec}s, padding={padding_sec}s, frame_len={frame_length}")
 
     # 1. Calculate RMS energy per frame
     rms_frames = librosa.feature.rms(y=y, frame_length=frame_length, hop_length=hop_length_calc)[0]
@@ -195,7 +197,7 @@ def segment_by_silence(
         elif not is_silent and start_idx != -1:
             if (i - start_idx) >= min_silence_frames:
                 silent_blocks.append((start_idx, i)) # Store frame indices (exclusive end)
-            start_idx = -1
+            start_idx = -1 # Reset start index
     # Check for trailing silence block
     if start_idx != -1 and (len(silent_frames_mask) - start_idx) >= min_silence_frames:
         silent_blocks.append((start_idx, len(silent_frames_mask)))
@@ -221,8 +223,10 @@ def segment_by_silence(
     total_samples = len(y)
 
     for start_frame, end_frame in non_silent_segments:
-        # Convert frame indices to sample indices (center of frame approximation)
+        # Convert frame indices to sample indices (use frame start)
         start_sample = librosa.frames_to_samples(start_frame, hop_length=hop_length_calc)
+        # Convert end frame index to sample index (end of the last frame in the segment)
+        # Use end_frame directly as it's exclusive
         end_sample = librosa.frames_to_samples(end_frame, hop_length=hop_length_calc)
 
         # Apply padding
@@ -241,6 +245,8 @@ def segment_by_silence(
         return []
 
     merged_segments = []
+    # Sort segments just in case they are out of order (shouldn't happen with current logic)
+    segments_samples.sort(key=lambda x: x[0])
     current_start, current_end = segments_samples[0]
 
     for next_start, next_end in segments_samples[1:]:
