@@ -1,4 +1,4 @@
-## Project Specification: Sygnals v1.0.0
+## Sygnals v1.0.0
 
 ### 1. Introduction
 

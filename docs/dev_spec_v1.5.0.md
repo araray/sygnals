@@ -1,8 +1,8 @@
-## Project Specification: Sygnals v1.5 - Enhanced Data Handling and Workflows
+## Sygnals v1.5 - Enhanced Data Handling and Workflows
 
 ### 1. Introduction
 
-This document outlines proposed features and enhancements for **Sygnals v1.5**. It assumes the successful implementation of the features described in the "Sygnals v1.0.0 Specification (Enhanced)" document, including the refined data science workflow, core signal processing commands (`segment`, `features`, `augment`, `visualize`), and the advanced plugin system foundation.
+This document outlines proposed features and enhancements for **Sygnals v1.5**. It assumes the successful implementation of the features described in the "Sygnals v1.0.0 Specification" document, including the refined data science workflow, core signal processing commands (`segment`, `features`, `augment`, `visualize`), and the advanced plugin system foundation.
 
 Sygnals v1.5 significantly enhances data manipulation capabilities by introducing a dedicated **`sygnals data`** command group for powerful table- and database-style operations on tabular data. It also aims to improve usability and efficiency through advanced batch processing, an interactive mode, implemented dataset assembly, deeper plugin integration, and basic parallel processing support.
 
