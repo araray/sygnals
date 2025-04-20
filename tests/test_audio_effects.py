@@ -7,20 +7,22 @@ Tests for augmentation effects (noise, pitch, time) are in test_augment.py.
 
 import pytest
 import numpy as np
-from numpy.testing import assert_allclose, assert_equal, assert_array_less
+from numpy.testing import assert_allclose, assert_equal, assert_array_less, assert_raises
 
 # Import effect functions to test (excluding those moved to augment)
 from sygnals.core.audio.effects import (
     simple_dynamic_range_compression,
     apply_reverb,
     apply_delay,
-    apply_graphic_eq,
-    apply_parametric_eq,
-    apply_chorus,    # Placeholder
-    apply_flanger,   # Placeholder
-    apply_tremolo,   # Placeholder
+    apply_graphic_eq,      # Still marked as experimental
+    apply_parametric_eq,   # Still marked as experimental
+    apply_chorus,          # Implemented
+    apply_flanger,         # Implemented
+    apply_tremolo,         # Implemented
     adjust_gain,
 )
+# Import compute_fft for spectral checks if needed
+from sygnals.core.dsp import compute_fft
 
 # --- Test Fixtures ---
 
@@ -46,6 +48,8 @@ def sample_pulse():
 
 # --- Test Cases ---
 
+# Compression, Reverb, Delay tests remain the same
+
 def test_simple_dynamic_range_compression(sample_audio_short):
     """Test the simple dynamic range compression effect."""
     signal, sr = sample_audio_short
@@ -64,8 +68,6 @@ def test_simple_dynamic_range_compression(sample_audio_short):
     below_thresh_indices = np.where(np.abs(signal) <= threshold)[0]
     if below_thresh_indices.size > 0:
         assert_allclose(signal[below_thresh_indices], compressed_signal[below_thresh_indices], atol=1e-7)
-
-# --- Tests for Reverb and Delay ---
 
 def test_apply_reverb(sample_pulse):
     """Test the basic reverb effect."""
@@ -113,7 +115,8 @@ def test_apply_delay(sample_pulse):
          # Check that there's significant energy (echo) in the expected region
          assert np.max(np.abs(delayed_signal[start:end])) > 0.1 # Echo should have noticeable amplitude
 
-# --- Tests for EQ (Placeholders / Basic Functionality) ---
+
+# --- Tests for EQ (Still Experimental) ---
 
 @pytest.mark.skip(reason="EQ implementation using iirdesign is experimental/incomplete")
 def test_apply_graphic_eq(sample_pulse):
@@ -121,9 +124,8 @@ def test_apply_graphic_eq(sample_pulse):
     signal, sr = sample_pulse
     band_gains = [(100, -10.0), (1000, 6.0)]
     processed_signal = apply_graphic_eq(signal, sr, band_gains)
-    # Placeholder currently returns original signal
-    assert_allclose(signal, processed_signal)
-    # TODO: Add real checks when EQ is fully implemented (e.g., check frequency response)
+    # TODO: Add real checks when EQ is fully implemented
+    assert processed_signal.shape == signal.shape
 
 @pytest.mark.skip(reason="EQ implementation using iirdesign is experimental/incomplete")
 def test_apply_parametric_eq(sample_pulse):
@@ -131,34 +133,94 @@ def test_apply_parametric_eq(sample_pulse):
     signal, sr = sample_pulse
     params = [
         {'type': 'low_shelf', 'freq': 200, 'gain_db': -6.0},
-        # {'type': 'peak', 'freq': 1000, 'gain_db': 3.0, 'q': 1.5}, # Peak skipped
         {'type': 'high_shelf', 'freq': 3000, 'gain_db': 4.0}
     ]
     processed_signal = apply_parametric_eq(signal, sr, params)
-    # Placeholder currently returns original signal (or applies only shelf filters if implemented)
-    # assert_allclose(signal, processed_signal) # This will fail if shelves are applied
-    assert processed_signal.shape == signal.shape # Shape should match
+    assert processed_signal.shape == signal.shape
     # TODO: Add real checks when EQ is fully implemented
 
-# --- Tests for Modulation Effects (Placeholders) ---
+# --- Tests for Implemented Modulation Effects ---
 
-def test_apply_chorus_placeholder(sample_audio_short):
-    """Test the chorus placeholder."""
+def test_apply_tremolo(sample_audio_short):
+    """Test the implemented tremolo effect."""
     signal, sr = sample_audio_short
-    processed_signal = apply_chorus(signal, sr)
-    assert_allclose(signal, processed_signal) # Placeholder returns original
+    rate = 4.0
+    depth = 0.7
+    shape = 'sine'
 
-def test_apply_flanger_placeholder(sample_audio_short):
-    """Test the flanger placeholder."""
-    signal, sr = sample_audio_short
-    processed_signal = apply_flanger(signal, sr)
-    assert_allclose(signal, processed_signal) # Placeholder returns original
+    processed_signal = apply_tremolo(signal, sr, rate=rate, depth=depth, shape=shape)
 
-def test_apply_tremolo_placeholder(sample_audio_short):
-    """Test the tremolo placeholder."""
+    assert processed_signal.shape == signal.shape
+    assert processed_signal.dtype == np.float64
+    # Check that output is different from input (unless depth=0)
+    assert not np.allclose(signal, processed_signal, atol=1e-6)
+
+    # Test depth=0 -> should be identical to input
+    processed_signal_no_depth = apply_tremolo(signal, sr, rate=rate, depth=0.0, shape=shape)
+    assert_allclose(signal, processed_signal_no_depth, atol=1e-9)
+
+    # Test invalid parameters
+    with assert_raises(ValueError, match="rate must be positive"):
+        apply_tremolo(signal, sr, rate=0)
+    with assert_raises(ValueError, match="depth must be between 0.0 and 1.0"):
+        apply_tremolo(signal, sr, depth=1.1)
+    with assert_raises(ValueError, match="shape must be"):
+        apply_tremolo(signal, sr, shape='invalid') # type: ignore
+
+def test_apply_chorus(sample_audio_short):
+    """Test the implemented chorus effect."""
     signal, sr = sample_audio_short
-    processed_signal = apply_tremolo(signal, sr)
-    assert_allclose(signal, processed_signal) # Placeholder returns original
+    rate = 1.0
+    depth = 0.003
+    delay = 0.030
+    feedback = 0.1
+    wet_level = 0.6
+
+    processed_signal = apply_chorus(signal, sr, rate=rate, depth=depth, delay=delay, feedback=feedback, wet_level=wet_level)
+
+    assert processed_signal.shape == signal.shape
+    assert processed_signal.dtype == np.float64
+    # Check that output is different from input (unless wet_level=0)
+    assert not np.allclose(signal, processed_signal, atol=1e-6)
+
+    # Test wet_level=0 -> should be identical to input * dry_level (default 1.0)
+    processed_signal_dry = apply_chorus(signal, sr, rate=rate, depth=depth, delay=delay, feedback=feedback, wet_level=0.0, dry_level=1.0)
+    assert_allclose(signal, processed_signal_dry, atol=1e-9)
+
+    # Test invalid parameters
+    with assert_raises(ValueError, match="depth .* must be less than the base delay"):
+        apply_chorus(signal, sr, depth=0.030, delay=0.030)
+    with assert_raises(ValueError, match="Feedback gain must be between 0.0 and < 1.0"):
+        apply_chorus(signal, sr, feedback=1.0)
+
+def test_apply_flanger(sample_audio_short):
+    """Test the implemented flanger effect."""
+    signal, sr = sample_audio_short
+    rate = 0.3
+    depth = 0.002
+    delay = 0.003 # Very short delay
+    feedback = 0.6
+    wet_level = 0.5
+    dry_level = 0.5
+
+    processed_signal = apply_flanger(signal, sr, rate=rate, depth=depth, delay=delay, feedback=feedback, wet_level=wet_level, dry_level=dry_level)
+
+    assert processed_signal.shape == signal.shape
+    assert processed_signal.dtype == np.float64
+    # Check that output is different from input (unless wet_level=0)
+    assert not np.allclose(signal, processed_signal, atol=1e-6)
+
+    # Test wet_level=0 -> should be identical to input * dry_level
+    processed_signal_dry = apply_flanger(signal, sr, rate=rate, depth=depth, delay=delay, feedback=feedback, wet_level=0.0, dry_level=0.5)
+    assert_allclose(signal * 0.5, processed_signal_dry, atol=1e-9)
+
+    # Test invalid parameters
+    with assert_raises(ValueError, match="depth .* must be less than the base delay"):
+        apply_flanger(signal, sr, depth=0.003, delay=0.003)
+    with assert_raises(ValueError, match="Feedback gain must be between -1.0 and < 1.0"):
+        apply_flanger(signal, sr, feedback=1.1)
+    with assert_raises(ValueError, match="Feedback gain must be between -1.0 and < 1.0"):
+        apply_flanger(signal, sr, feedback=-1.1)
 
 
 # --- Tests for Utility Effects ---
@@ -189,7 +251,3 @@ def test_adjust_gain(sample_audio_short):
     # Test zero gain
     zero_gain_signal = adjust_gain(signal, gain_db=0.0)
     assert_allclose(signal, zero_gain_signal, atol=1e-9)
-
-# Removed test_add_noise as it's now in test_augment.py
-# Removed test_pitch_shift as it's now in test_augment.py
-# Removed test_time_stretch as it's now in test_augment.py
