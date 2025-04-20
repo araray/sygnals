@@ -8,7 +8,7 @@ transient shaping, and stereo widening.
 import logging
 import numpy as np
 from numpy.typing import NDArray
-from typing import Optional, Literal, Tuple
+from typing import Optional, Literal, Tuple, Union
 import warnings # Import the warnings module
 import librosa # Used for HPSS, STFT, ISTFT
 
