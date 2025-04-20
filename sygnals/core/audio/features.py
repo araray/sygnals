@@ -4,7 +4,8 @@
 Functions for extracting audio-specific features.
 
 Leverages libraries like librosa for common audio features like ZCR, RMS, pitch,
-and onset detection. Includes placeholders for more complex voice quality features.
+and onset detection. Includes approximate implementations for more complex
+voice quality features (HNR, Jitter, Shimmer).
 """
 
 import logging
@@ -15,6 +16,9 @@ from numpy.typing import NDArray
 from typing import Optional, Dict, Any, Tuple, Literal
 
 logger = logging.getLogger(__name__)
+
+# Define a small epsilon for safe division and log calculations
+_EPSILON = np.finfo(np.float64).eps
 
 # --- Basic Frame-Based Features ---
 
@@ -47,17 +51,6 @@ def zero_crossing_rate(
     Raises:
         ValueError: If input `y` is not 1D.
         Exception: For errors during librosa calculation.
-
-    Example:
-        >>> sr = 22050
-        >>> y_noise = np.random.randn(sr)
-        >>> y_sine = np.sin(2 * np.pi * 440.0 * np.arange(sr)/sr)
-        >>> zcr_noise = zero_crossing_rate(y_noise)
-        >>> zcr_sine = zero_crossing_rate(y_sine)
-        >>> print(f"Mean ZCR (Noise): {np.mean(zcr_noise):.3f}")
-        >>> print(f"Mean ZCR (Sine): {np.mean(zcr_sine):.3f}")
-        Mean ZCR (Noise): 0.XXX # Expected higher value
-        Mean ZCR (Sine): 0.XXX # Expected lower value (approx 2*440/sr)
     """
     if y.ndim != 1:
         raise ValueError("Input audio data must be a 1D array.")
@@ -111,14 +104,6 @@ def rms_energy(
     Raises:
         ValueError: If input `y` is not 1D when used, or if neither `y` nor `S` is provided.
         Exception: For errors during librosa calculation.
-
-    Example:
-        >>> sr = 22050
-        >>> y = np.sin(2 * np.pi * 440.0 * np.arange(sr)/sr) * 0.5 # Amplitude 0.5
-        >>> rms = rms_energy(y=y)
-        >>> # Expected RMS for sine A*sin(wt) is A/sqrt(2)
-        >>> print(f"Mean RMS: {np.mean(rms):.3f} (Expected approx: {0.5/np.sqrt(2):.3f})")
-        Mean RMS: 0.XXX (Expected approx: 0.354)
     """
     if S is None and y is None:
         raise ValueError("Either audio time series 'y' or magnitude spectrogram 'S' must be provided.")
@@ -174,21 +159,13 @@ def fundamental_frequency(
     Returns:
         A tuple containing:
         - times (NDArray[np.float64]): Time points for each estimate (center of frame, seconds).
-        - f0 (NDArray[np.float64]): Fundamental frequency estimates in Hz. 0.0 for unvoiced frames.
+        - f0 (NDArray[np.float64]): Fundamental frequency estimates in Hz. NaN for unvoiced frames.
         - voiced_flag (NDArray[np.float64]): Boolean flag indicating if frame is voiced (1.0 if voiced, 0.0 otherwise).
         - voiced_probs (NDArray[np.float64]): Voicing probability estimates (from 'pyin', otherwise same as voiced_flag).
 
     Raises:
         ValueError: If input `y` is not 1D or method is invalid.
         Exception: For errors during librosa calculation.
-
-    Example:
-        >>> sr = 22050
-        >>> y = librosa.tone(frequency=261.63, sr=sr, duration=1) # Middle C
-        >>> times, f0, vf, vp = fundamental_frequency(y, sr=sr, method='pyin')
-        >>> voiced_f0 = f0[vf > 0.5] # Get f0 for voiced frames
-        >>> print(f"Mean F0 (voiced): {np.mean(voiced_f0):.2f} Hz")
-        Mean F0 (voiced): 261.XX Hz
     """
     if y.ndim != 1:
         raise ValueError("Input audio data must be a 1D array.")
@@ -203,12 +180,14 @@ def fundamental_frequency(
 
     try:
         if method == 'pyin':
+            # Fill NaN with a placeholder (e.g., 0) temporarily if needed, but keep original NaNs
             f0_raw, voiced_flag_raw, voiced_probs_raw = librosa.pyin(
                 y=y,
                 fmin=fmin,
                 fmax=fmax,
                 sr=sr,
                 hop_length=hop_length, # Pass hop_length if specified
+                fill_na=np.nan, # Explicitly request NaN for unvoiced
                 **kwargs
             )
         elif method == 'yin':
@@ -221,7 +200,7 @@ def fundamental_frequency(
                  **kwargs
              )
              # YIN doesn't directly provide voiced_flag/probs. Estimate based on NaN.
-             voiced_flag_raw = np.isfinite(f0_raw) # Simple estimate: voiced if f0 is not NaN
+             voiced_flag_raw = np.isfinite(f0_raw) # Voiced if f0 is not NaN
              voiced_probs_raw = voiced_flag_raw.astype(float) # Simple probability estimate
         else:
              raise ValueError(f"Unsupported pitch estimation method: {method}. Choose 'pyin' or 'yin'.")
@@ -229,9 +208,8 @@ def fundamental_frequency(
         # Calculate corresponding time points based on hop length used
         times = librosa.times_like(f0_raw, sr=sr, hop_length=hop_length_calc)
 
-        # Ensure float64 output and handle potential NaNs in f0
-        # Replace NaN with 0.0 for unvoiced frames for consistency
-        f0_out = np.nan_to_num(f0_raw, nan=0.0).astype(np.float64, copy=False)
+        # Ensure float64 output. Keep NaNs in f0 for unvoiced frames.
+        f0_out = f0_raw.astype(np.float64, copy=False)
         voiced_flag_out = voiced_flag_raw.astype(np.float64, copy=False) # Store bools as float 0/1
         voiced_probs_out = voiced_probs_raw.astype(np.float64, copy=False)
         times_out = times.astype(np.float64, copy=False)
@@ -241,151 +219,277 @@ def fundamental_frequency(
         logger.error(f"Error estimating fundamental frequency: {e}")
         raise
 
-# --- Voice Quality Features (Placeholders) ---
+# --- Voice Quality Features (Approximate Implementations) ---
 
 def harmonic_to_noise_ratio(
     y: NDArray[np.float64],
-    sr: int, # sr is needed for context, but not directly used in placeholder calculation
-    frame_length: int = 2048,
-    hop_length: int = 512,
-    center: bool = True, # Assume centering consistent with other features
-    **kwargs: Any
+    sr: int, # sr is needed for context, but not directly used here
+    frame_length: int = 2048, # Frame length for HPSS STFT
+    hop_length: Optional[int] = None, # Hop length for HPSS STFT
+    harmonic_margin: Union[float, Tuple[float, ...]] = 1.0,
+    percussive_margin: Union[float, Tuple[float, ...]] = 1.0,
+    **kwargs: Any # Allow additional args for HPSS if needed
 ) -> NDArray[np.float64]:
     """
-    Estimates the Harmonic-to-Noise Ratio (HNR) [Placeholder].
+    Estimates the Harmonic-to-Noise Ratio (HNR) using HPSS [Approximation].
 
-    HNR measures the ratio of harmonic energy (related to periodic, pitched sound)
-    to noise energy (related to aperiodic or random components) in the signal,
-    often used as an indicator of voice quality (e.g., hoarseness, breathiness).
-    Higher HNR generally indicates a clearer, more harmonic voice.
+    Calculates the ratio of energy in the harmonic component to the energy in the
+    percussive component for each frame, obtained via librosa.effects.hpss.
+    This serves as a rough approximation of HNR. Higher values suggest more
+    harmonic content relative to noise/percussive content.
 
-    NOTE: This is a placeholder implementation and returns an array of NaNs.
-          A real implementation would likely involve autocorrelation, cepstral analysis,
-          or specialized algorithms (e.g., from Praat).
+    NOTE: This is NOT a standard HNR calculation (which often uses autocorrelation
+          or cepstral methods). It approximates noise with the percussive component.
+          Results may differ significantly from Praat or other standard HNR tools.
 
     Args:
         y: Audio time series (1D float64).
-        sr: Sampling rate (unused in placeholder calculation but kept for signature consistency).
-        frame_length: Analysis frame length (samples).
-        hop_length: Hop length between frames (samples).
-        center: Whether the analysis is centered (affects frame count calculation).
-        **kwargs: Additional parameters for future implementation.
+        sr: Sampling rate (Hz). Unused in this implementation but kept for signature consistency.
+        frame_length: Frame length (samples) used for the internal STFT in HPSS. (Default: 2048)
+        hop_length: Hop length (samples) used for the internal STFT in HPSS. Defaults to frame_length // 4.
+        harmonic_margin: Margin parameter for HPSS separation (controls harmonic smoothness).
+        percussive_margin: Margin parameter for HPSS separation (controls percussive sparsity).
+        **kwargs: Additional keyword arguments passed to `librosa.effects.hpss`.
 
     Returns:
-        An array of NaNs with the expected length based on framing parameters.
-        Shape: (num_frames,). Dtype: float64.
+        Approximated HNR in dB for each frame (1D array, float64). Returns NaN if
+        percussive energy is zero for a frame. Length matches the number of frames
+        produced by the internal STFT of HPSS.
     """
-    logger.warning("harmonic_to_noise_ratio feature is a placeholder and returns NaN.")
-    # Calculate expected number of frames consistent with librosa's centered framing
-    if center:
-        # Use librosa's frame count calculation for centered frames
-        num_frames = 1 + len(y) // hop_length
-    else:
-        # Frame count calculation for non-centered analysis
-        if len(y) >= frame_length:
-            num_frames = 1 + (len(y) - frame_length) // hop_length
-        else:
-            num_frames = 0 # No full frames possible
+    logger.warning("harmonic_to_noise_ratio feature is an approximation based on HPSS energy ratio.")
+    if y.ndim != 1:
+        raise ValueError("Input audio 'y' must be 1D for HPSS-based HNR.")
 
-    logger.debug(f"Placeholder HNR: Calculated num_frames = {num_frames} based on framing parameters.")
-    return np.full(num_frames, np.nan, dtype=np.float64)
+    hop_length_calc = hop_length if hop_length is not None else frame_length // 4
+
+    try:
+        # 1. Perform HPSS
+        # HPSS uses STFT internally, parameters affect separation
+        y_harmonic, y_percussive = librosa.effects.hpss(
+            y,
+            kernel_size=(31, 31), # Default kernel sizes
+            margin=(harmonic_margin, percussive_margin),
+            # Pass STFT parameters if needed, though hpss uses its own defaults if not specified
+            # n_fft=frame_length, # HPSS uses its own internal STFT logic
+            # hop_length=hop_length_calc,
+            **kwargs
+        )
+
+        # 2. Calculate RMS energy per frame for harmonic and percussive components
+        # Use the same framing parameters as the feature manager likely uses elsewhere
+        rms_harmonic = rms_energy(y=y_harmonic, frame_length=frame_length, hop_length=hop_length_calc, center=True)
+        rms_percussive = rms_energy(y=y_percussive, frame_length=frame_length, hop_length=hop_length_calc, center=True)
+
+        # Ensure lengths match (should match if using same framing)
+        num_frames = min(len(rms_harmonic), len(rms_percussive))
+        rms_harmonic = rms_harmonic[:num_frames]
+        rms_percussive = rms_percussive[:num_frames]
+
+        # 3. Calculate HNR approximation in dB
+        # HNR = 10 * log10 (Energy_harmonic / Energy_percussive)
+        # Energy is proportional to RMS^2
+        power_harmonic = rms_harmonic**2
+        power_percussive = rms_percussive**2
+
+        # Avoid division by zero and log(0)
+        # If percussive power is near zero, HNR is very high (set to large number or NaN?)
+        # If harmonic power is near zero but percussive is not, HNR is very low.
+        hnr_db = np.full(num_frames, np.nan, dtype=np.float64) # Initialize with NaN
+        valid_indices = (power_percussive > _EPSILON) & (power_harmonic > _EPSILON)
+        hnr_db[valid_indices] = 10 * np.log10(power_harmonic[valid_indices] / power_percussive[valid_indices])
+
+        # Handle cases where only one component has energy
+        only_harmonic = (power_harmonic > _EPSILON) & (power_percussive <= _EPSILON)
+        hnr_db[only_harmonic] = 80.0 # Assign a large dB value for very high HNR
+        only_percussive = (power_harmonic <= _EPSILON) & (power_percussive > _EPSILON)
+        hnr_db[only_percussive] = -80.0 # Assign a very low dB value
+
+        logger.debug(f"Calculated approximate HNR for {num_frames} frames.")
+        return hnr_db
+
+    except Exception as e:
+        logger.error(f"Error calculating approximate HNR using HPSS: {e}")
+        # Return NaN array of expected length if possible
+        num_frames = 1 + len(y) // hop_length_calc if hop_length_calc > 0 else 0
+        return np.full(num_frames, np.nan, dtype=np.float64)
+
 
 def jitter(
     y: NDArray[np.float64],
-    sr: int, # sr is needed for context, but not directly used in placeholder calculation
+    sr: int,
     f0: Optional[NDArray[np.float64]] = None, # Requires fundamental frequency estimates
-    method: str = 'local', # Common methods: 'local', 'rap', 'ppq5'
-    frame_length: int = 2048, # Added frame/hop/center for consistency
-    hop_length: int = 512,
-    center: bool = True,
-    **kwargs: Any
+    voiced_flag: Optional[NDArray[np.float64]] = None, # Requires voicing information
+    method: Literal['local_abs'] = 'local_abs', # Only local absolute jitter implemented
+    f0_min: float = 75.0, # Min F0 for period calculation
+    f0_max: float = 600.0, # Max F0 for period calculation
+    hop_length: Optional[int] = None # Hop length used for F0 estimation
+    # **kwargs: Any # Reserved for future methods/params
 ) -> NDArray[np.float64]:
     """
-    Estimates the frequency jitter (periodicity variations) [Placeholder].
+    Estimates the frequency jitter (local, absolute) [Approximation].
 
-    Jitter refers to the short-term variations in the fundamental frequency (F0)
-    period length of voiced speech. It's often used as a measure of voice instability
-    or roughness. Calculation typically requires accurate F0 estimates and period marking.
+    Calculates the mean absolute difference between periods of consecutive voiced frames.
+    Requires F0 estimates and voicing information, typically obtained from `fundamental_frequency`.
 
-    NOTE: This is a placeholder implementation and returns an array of NaNs.
-          A real implementation requires F0 tracking and period difference calculations,
-          often implemented in specialized libraries (e.g., Praat via Parselmouth).
+    NOTE: This is a simplified Jitter calculation based on frame-level F0.
+          Standard Jitter measures (like Jita, RAP, PPQ) often require more precise
+          period marking within the time-domain signal and are usually calculated
+          using specialized tools (e.g., Praat). Results may differ significantly.
 
     Args:
-        y: Audio time series (1D float64).
-        sr: Sampling rate (unused in placeholder calculation).
-        f0: Optional pre-computed fundamental frequency contour (Hz). If None,
-            it would need to be calculated internally (not done in placeholder).
-        method: Jitter calculation method (e.g., 'local', 'rap', 'ppq5'). Placeholder ignores this.
-        frame_length: Analysis frame length (samples). Used to determine output length if f0 is None.
-        hop_length: Hop length between frames (samples). Used to determine output length if f0 is None.
-        center: Whether the analysis is centered. Used to determine output length if f0 is None.
-        **kwargs: Additional parameters for future implementation.
+        y: Audio time series (1D float64). Used only to determine output length if f0 is None.
+        sr: Sampling rate (Hz).
+        f0: Fundamental frequency contour in Hz (1D array). NaN indicates unvoiced frames.
+        voiced_flag: Voicing flag contour (1D array, 1.0=voiced, 0.0=unvoiced).
+                     Must correspond frame-by-frame with f0.
+        method: Jitter calculation method. Currently only 'local_abs' (mean absolute
+                difference between consecutive periods in seconds) is implemented.
+        f0_min: Minimum F0 value (Hz) to consider for period calculation. F0 values
+                below this (even if voiced) are ignored. (Default: 75.0)
+        f0_max: Maximum F0 value (Hz) to consider for period calculation. F0 values
+                above this (even if voiced) are ignored. (Default: 600.0)
+        hop_length: Hop length (samples) used for F0 analysis. Needed only to determine
+                    output array size if f0 is not provided.
 
     Returns:
-        An array of NaNs with the expected length based on F0 contour or framing.
-        Shape: (num_frames,). Dtype: float64.
+        Jitter value (local, absolute difference in seconds) for each frame (1D array, float64).
+        Returns NaN for unvoiced frames or frames where jitter cannot be calculated
+        (e.g., start of a voiced segment, F0 out of range).
     """
-    logger.warning("jitter feature is a placeholder and returns NaN.")
-    # Determine output length based on f0 if provided, otherwise based on standard framing
-    if f0 is not None:
-        num_frames = len(f0)
-    else:
-        # Calculate expected number of frames consistent with librosa's centered framing
-        if center:
-            num_frames = 1 + len(y) // hop_length
-        else:
-            if len(y) >= frame_length:
-                num_frames = 1 + (len(y) - frame_length) // hop_length
-            else:
-                num_frames = 0
-    logger.debug(f"Placeholder Jitter: Calculated num_frames = {num_frames}.")
-    return np.full(num_frames, np.nan, dtype=np.float64)
+    logger.warning("Jitter feature is an approximation based on frame-level F0 period differences.")
+    if method != 'local_abs':
+        raise NotImplementedError(f"Jitter method '{method}' not implemented. Only 'local_abs' is available.")
+
+    if f0 is None or voiced_flag is None:
+        logger.warning("F0 or voiced_flag not provided. Calculating F0 internally using pyin.")
+        # Calculate F0 internally if not provided
+        hop_length_calc = hop_length if hop_length is not None else 512
+        try:
+            _, f0, voiced_flag, _ = fundamental_frequency(y, sr, fmin=f0_min, fmax=f0_max, method='pyin', hop_length=hop_length_calc)
+        except Exception as e:
+            logger.error(f"Internal F0 calculation failed for Jitter: {e}")
+            num_frames = 1 + len(y) // hop_length_calc if hop_length_calc > 0 else 0
+            return np.full(num_frames, np.nan, dtype=np.float64)
+
+    if len(f0) != len(voiced_flag):
+        raise ValueError("Length of f0 and voiced_flag must match.")
+
+    num_frames = len(f0)
+    jitter_values = np.full(num_frames, np.nan, dtype=np.float64)
+
+    # Calculate periods (T0 = 1/F0) for valid, voiced frames within range
+    periods = np.full(num_frames, np.nan, dtype=np.float64)
+    valid_f0_mask = (voiced_flag > 0.5) & np.isfinite(f0) & (f0 >= f0_min) & (f0 <= f0_max)
+    periods[valid_f0_mask] = 1.0 / f0[valid_f0_mask]
+
+    # Calculate absolute difference between consecutive valid periods
+    period_diffs = np.abs(np.diff(periods)) # Will contain NaN where periods[i] or periods[i+1] is NaN
+
+    # Jitter for frame i is based on diff between period i and period i-1
+    # So, jitter_values[i] corresponds to period_diffs[i-1]
+    # Assign NaN to the first frame and any frame where the diff is NaN
+    jitter_values[1:] = period_diffs
+    # Ensure NaN remains where diff calculation was invalid
+    jitter_values[~np.isfinite(period_diffs)] = np.nan
+    # Explicitly set NaN for the first frame and unvoiced frames
+    jitter_values[0] = np.nan
+    jitter_values[voiced_flag <= 0.5] = np.nan # Also NaN for originally unvoiced
+
+    logger.debug(f"Calculated approximate local absolute jitter for {num_frames} frames.")
+    return jitter_values
+
 
 def shimmer(
     y: NDArray[np.float64],
-    sr: int, # sr is needed for context, but not directly used in placeholder calculation
-    frame_length: int = 2048,
-    hop_length: int = 512,
-    center: bool = True, # Assume centering consistent with other features
-    method: str = 'local_db', # Common methods: 'local', 'local_db', 'apq11'
-    **kwargs: Any
+    sr: int, # sr needed for context if calculating RMS internally
+    voiced_flag: Optional[NDArray[np.float64]] = None, # Requires voicing information
+    method: Literal['local_rms_rel'] = 'local_rms_rel', # Only local relative RMS shimmer implemented
+    frame_length: int = 2048, # Frame length for RMS calculation
+    hop_length: Optional[int] = None, # Hop length for RMS calculation
+    center: bool = True, # Centering for RMS calculation
+    # **kwargs: Any # Reserved for future methods/params
 ) -> NDArray[np.float64]:
     """
-    Estimates the amplitude shimmer (amplitude variations) [Placeholder].
+    Estimates the amplitude shimmer (local, relative RMS difference) [Approximation].
 
-    Shimmer refers to the short-term variations in the peak amplitude of consecutive
-    fundamental frequency periods in voiced speech. It's another measure often
-    associated with voice quality and perceived roughness or breathiness.
+    Calculates the mean absolute relative difference between the RMS energy of
+    consecutive voiced frames. Requires voicing information.
 
-    NOTE: This is a placeholder implementation and returns an array of NaNs.
-          A real implementation requires peak amplitude tracking within voiced segments,
-          often implemented in specialized libraries (e.g., Praat via Parselmouth).
+    NOTE: This is a simplified Shimmer calculation based on frame-level RMS energy.
+          Standard Shimmer measures (like ShdB, APQ) often require more precise
+          peak amplitude tracking within fundamental periods and are usually calculated
+          using specialized tools (e.g., Praat). Results may differ significantly.
 
     Args:
         y: Audio time series (1D float64).
-        sr: Sampling rate (unused in placeholder calculation).
-        frame_length: Analysis frame length (samples).
-        hop_length: Hop length between frames (samples).
-        center: Whether the analysis is centered.
-        method: Shimmer calculation method (e.g., 'local', 'local_db', 'apq11'). Placeholder ignores this.
-        **kwargs: Additional parameters for future implementation.
+        sr: Sampling rate (Hz). Used if calculating RMS internally.
+        voiced_flag: Voicing flag contour (1D array, 1.0=voiced, 0.0=unvoiced).
+                     If None, it will be calculated internally using pyin F0.
+        method: Shimmer calculation method. Currently only 'local_rms_rel' (mean absolute
+                relative difference between consecutive voiced frame RMS values) is implemented.
+        frame_length: Frame length (samples) for RMS calculation. (Default: 2048)
+        hop_length: Hop length (samples) for RMS calculation. Defaults to frame_length // 4.
+        center: Whether RMS analysis uses centered frames. (Default: True)
 
     Returns:
-        An array of NaNs with the expected length based on framing parameters.
-        Shape: (num_frames,). Dtype: float64.
+        Shimmer value (local, relative RMS difference) for each frame (1D array, float64).
+        Returns NaN for unvoiced frames or frames where shimmer cannot be calculated
+        (e.g., start of a voiced segment).
     """
-    logger.warning("shimmer feature is a placeholder and returns NaN.")
-    # Calculate expected number of frames consistent with librosa's centered framing
-    if center:
-        num_frames = 1 + len(y) // hop_length
-    else:
-        if len(y) >= frame_length:
-            num_frames = 1 + (len(y) - frame_length) // hop_length
-        else:
-            num_frames = 0
-    logger.debug(f"Placeholder Shimmer: Calculated num_frames = {num_frames}.")
-    return np.full(num_frames, np.nan, dtype=np.float64)
+    logger.warning("Shimmer feature is an approximation based on frame-level relative RMS differences.")
+    if y.ndim != 1:
+        raise ValueError("Input audio 'y' must be 1D for shimmer calculation.")
+    if method != 'local_rms_rel':
+        raise NotImplementedError(f"Shimmer method '{method}' not implemented. Only 'local_rms_rel' is available.")
+
+    hop_length_calc = hop_length if hop_length is not None else frame_length // 4
+    if hop_length_calc <= 0:
+         raise ValueError("Hop length must be positive.")
+
+    # Calculate RMS energy
+    try:
+        rms_frames = rms_energy(y=y, frame_length=frame_length, hop_length=hop_length_calc, center=center)
+    except Exception as e:
+        logger.error(f"Internal RMS calculation failed for Shimmer: {e}")
+        num_frames_est = 1 + len(y) // hop_length_calc if hop_length_calc > 0 else 0
+        return np.full(num_frames_est, np.nan, dtype=np.float64)
+
+    # Get voicing information if not provided
+    if voiced_flag is None:
+        logger.warning("voiced_flag not provided for Shimmer. Calculating F0 internally using pyin.")
+        try:
+            # Use F0 defaults matching Jitter if needed
+            f0_min_sh = 75.0
+            f0_max_sh = 600.0
+            _, _, voiced_flag, _ = fundamental_frequency(y, sr, fmin=f0_min_sh, fmax=f0_max_sh, method='pyin', hop_length=hop_length_calc)
+        except Exception as e:
+            logger.error(f"Internal F0/voicing calculation failed for Shimmer: {e}")
+            return np.full(len(rms_frames), np.nan, dtype=np.float64)
+
+    # Ensure RMS and voicing align (take min length)
+    num_frames = min(len(rms_frames), len(voiced_flag))
+    if num_frames == 0: return np.array([], dtype=np.float64)
+
+    rms_frames = rms_frames[:num_frames]
+    voiced_flag = voiced_flag[:num_frames]
+    shimmer_values = np.full(num_frames, np.nan, dtype=np.float64)
+
+    # Calculate relative difference between RMS of consecutive *voiced* frames
+    for i in range(1, num_frames):
+        # Check if both current and previous frames are voiced
+        if voiced_flag[i] > 0.5 and voiced_flag[i-1] > 0.5:
+            # Calculate relative difference: 2 * |rms[i] - rms[i-1]| / (rms[i] + rms[i-1])
+            rms_i = rms_frames[i]
+            rms_prev = rms_frames[i-1]
+            sum_rms = rms_i + rms_prev
+            if sum_rms > _EPSILON: # Avoid division by zero
+                shimmer_values[i] = 2.0 * np.abs(rms_i - rms_prev) / sum_rms
+            else:
+                 # If sum is zero, difference is also zero (or should be)
+                 shimmer_values[i] = 0.0
+
+    logger.debug(f"Calculated approximate local relative RMS shimmer for {num_frames} frames.")
+    return shimmer_values
 
 
 # --- Other Global Audio Metrics ---
@@ -415,8 +519,9 @@ def get_basic_audio_metrics(y: NDArray[np.float64], sr: int) -> Dict[str, float]
         # Handle multi-channel by converting to mono first for RMS/peak calculation
         if y.ndim > 1:
             logger.warning("Input signal is multi-channel. Converting to mono for global RMS/peak calculation.")
-            y_mono = np.mean(y, axis=0) # Average across channels (assuming channels are first dim if shape[0] < shape[1])
-            # Librosa's get_duration works correctly on multi-channel input based on samples dim
+            # Ensure averaging happens along the correct axis (assuming channels are dim 0)
+            y_mono = np.mean(y, axis=0) if y.shape[0] < y.shape[1] else np.mean(y, axis=1)
+            y_mono = y_mono.astype(np.float64)
         else:
             y_mono = y
 
@@ -473,13 +578,6 @@ def detect_onsets(
         ValueError: If required inputs (`y`/`sr` or `onset_envelope`) are missing,
                     or if `units` requires `sr`/`hop_length` which are not available.
         Exception: For errors during librosa calculation.
-
-    Example:
-        >>> sr = 22050
-        >>> clicks = librosa.clicks(times=[0.5, 1.0, 1.5], sr=sr, length=sr*2)
-        >>> onset_times = detect_onsets(y=clicks, sr=sr, units='time')
-        >>> print(np.round(onset_times, 2))
-        [0.5  1.  1.5]
     """
     if y is None and onset_envelope is None:
         raise ValueError("Either audio time series 'y' or 'onset_envelope' must be provided.")
