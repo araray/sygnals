@@ -7,7 +7,20 @@ and the registry for extensions.
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Callable, Type, Optional, List, Set, Union
+from typing import Dict, Any, Callable, Type, Optional, List, Set, Union, Tuple
+from pathlib import Path
+
+# Import necessary types for data handlers
+import pandas as pd
+import numpy as np
+from numpy.typing import NDArray
+# Define types for reader/writer callables for clarity
+# Reader should return ReadResult type from data_handler
+ReadResult = Union[pd.DataFrame, Dict[str, NDArray[Any]], Tuple[NDArray[np.float64], int]]
+ReaderCallable = Callable[..., ReadResult] # path, **kwargs -> ReadResult
+# Writer takes data (SaveInput type from data_handler) and path, **kwargs
+SaveInput = Union[pd.DataFrame, NDArray[Any], Dict[str, NDArray[Any]], Tuple[NDArray[np.float64], int]]
+WriterCallable = Callable[[SaveInput, Union[str, Path], Any], None] # data, path, **kwargs -> None
 
 # Import Click types for CLI command registration if needed later
 try:
@@ -74,6 +87,28 @@ class SygnalsPluginBase(ABC):
         """Register custom data augmentation functions."""
         pass
 
+    def register_data_readers(self, registry: 'PluginRegistry'):
+        """
+        Register custom data reading functions for specific file extensions.
+
+        Args:
+            registry: The central plugin registry instance. Use methods like
+                      registry.add_reader(extension: str, reader_callable: ReaderCallable).
+                      Extension should include the dot (e.g., '.parquet').
+        """
+        pass # New hook for data readers
+
+    def register_data_writers(self, registry: 'PluginRegistry'):
+        """
+        Register custom data writing functions for specific file extensions.
+
+        Args:
+            registry: The central plugin registry instance. Use methods like
+                      registry.add_writer(extension: str, writer_callable: WriterCallable).
+                      Extension should include the dot (e.g., '.parquet').
+        """
+        pass # New hook for data writers
+
     def register_cli_commands(self, registry: 'PluginRegistry'):
         """
         Register custom Click command groups or commands.
@@ -109,8 +144,8 @@ class PluginRegistry:
     """
     Central registry for extensions provided by plugins.
 
-    Holds dictionaries mapping registered names to the corresponding callable
-    or class provided by a plugin.
+    Holds dictionaries mapping registered names or extensions to the corresponding
+    callable or class provided by a plugin.
     """
     def __init__(self):
         self._filters: Dict[str, Callable] = {}
@@ -119,6 +154,8 @@ class PluginRegistry:
         self._visualizations: Dict[str, Callable] = {}
         self._effects: Dict[str, Callable] = {}
         self._augmenters: Dict[str, Callable] = {}
+        self._readers: Dict[str, ReaderCallable] = {} # New: extension -> reader func
+        self._writers: Dict[str, WriterCallable] = {} # New: extension -> writer func
         self._cli_commands: List[ClickCommandType] = []
         self._registered_plugin_names: Set[str] = set() # Track names of loaded plugins
 
@@ -175,6 +212,28 @@ class PluginRegistry:
         logger.debug(f"Registering augmenter: '{name}'")
         self._augmenters[name] = augmenter_callable
 
+    def add_reader(self, extension: str, reader_callable: ReaderCallable):
+        """Register a custom data reader for a file extension."""
+        ext_lower = extension.lower()
+        if not ext_lower.startswith('.'):
+             logger.warning(f"Reader extension '{extension}' should start with a dot (e.g., '.parquet'). Adding dot.")
+             ext_lower = '.' + ext_lower
+        if ext_lower in self._readers:
+            logger.warning(f"Reader for extension '{ext_lower}' is already registered. Overwriting.")
+        logger.debug(f"Registering data reader for extension: '{ext_lower}'")
+        self._readers[ext_lower] = reader_callable
+
+    def add_writer(self, extension: str, writer_callable: WriterCallable):
+        """Register a custom data writer for a file extension."""
+        ext_lower = extension.lower()
+        if not ext_lower.startswith('.'):
+             logger.warning(f"Writer extension '{extension}' should start with a dot (e.g., '.parquet'). Adding dot.")
+             ext_lower = '.' + ext_lower
+        if ext_lower in self._writers:
+            logger.warning(f"Writer for extension '{ext_lower}' is already registered. Overwriting.")
+        logger.debug(f"Registering data writer for extension: '{ext_lower}'")
+        self._writers[ext_lower] = writer_callable
+
     def add_cli_command(self, command: ClickCommandType):
         """Register a custom Click command or group."""
         if click is None:
@@ -212,6 +271,14 @@ class PluginRegistry:
         """Get a registered augmenter by name."""
         return self._augmenters.get(name)
 
+    def get_reader(self, extension: str) -> Optional[ReaderCallable]:
+        """Get a registered data reader by file extension (lowercase, including dot)."""
+        return self._readers.get(extension.lower())
+
+    def get_writer(self, extension: str) -> Optional[WriterCallable]:
+        """Get a registered data writer by file extension (lowercase, including dot)."""
+        return self._writers.get(extension.lower())
+
     # --- Methods to List Extensions ---
 
     def list_filters(self) -> List[str]:
@@ -238,6 +305,14 @@ class PluginRegistry:
         """Return a list of registered augmenter names."""
         return sorted(list(self._augmenters.keys()))
 
+    def list_readers(self) -> List[str]:
+        """Return a list of registered reader extensions."""
+        return sorted(list(self._readers.keys()))
+
+    def list_writers(self) -> List[str]:
+        """Return a list of registered writer extensions."""
+        return sorted(list(self._writers.keys()))
+
     def get_cli_commands(self) -> List[ClickCommandType]:
         """Return the list of registered CLI commands/groups."""
         return self._cli_commands
@@ -245,6 +320,7 @@ class PluginRegistry:
     # --- Get All Extensions (Used by Feature Manager etc.) ---
     def get_all_extensions(self) -> Dict[str, Dict[str, Callable]]:
         """Return all registered extensions grouped by type."""
+        # Note: Reader/Writer callables might have different signatures, so handle carefully if using this dict directly.
         return {
             "filters": self._filters.copy(),
             "transforms": self._transforms.copy(),
@@ -252,5 +328,7 @@ class PluginRegistry:
             "visualizations": self._visualizations.copy(),
             "effects": self._effects.copy(),
             "augmenters": self._augmenters.copy(),
+            "readers": self._readers.copy(), # Add readers
+            "writers": self._writers.copy(), # Add writers
             # CLI commands are handled separately
         }
