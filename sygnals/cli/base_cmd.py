@@ -29,13 +29,14 @@ class ConfigGroup(click.Group):
     """
     A custom Click Group that loads configuration, sets up logging,
     and initializes the plugin system before invoking the group or its subcommands.
-    Passes config, loader, and registry via the context object (ctx.obj).
-    Handles exceptions gracefully.
+    Passes config, loader, registry via the context object (ctx.obj).
+    Handles exceptions during setup gracefully.
     """
     def invoke(self, ctx: click.Context):
         """
         Overrides the default invoke method to set up config, logging, plugins,
-        and handle exceptions during command execution.
+        and handle exceptions during setup. Exceptions during command execution
+        are allowed to propagate.
         """
         # Ensure ctx.obj is initialized as a dictionary
         if ctx.obj is None:
@@ -46,6 +47,7 @@ class ConfigGroup(click.Group):
         setup_success = False
 
         try:
+            # --- Setup Phase ---
             # 1. Load Configuration
             if 'config' not in ctx.obj:
                 config = load_configuration()
@@ -57,11 +59,20 @@ class ConfigGroup(click.Group):
 
             # 2. Setup Logging based on config and verbosity options
             if config_loaded_here:
+                # Determine verbosity from current or parent context params
                 verbosity = 0
-                if ctx.params.get('verbose', 0) > 0: verbosity = ctx.params['verbose']
-                if ctx.params.get('quiet', False): verbosity = -1
-                elif ctx.parent and ctx.parent.params.get('verbose', 0) > 0: verbosity = ctx.parent.params['verbose']
-                elif ctx.parent and ctx.parent.params.get('quiet', False): verbosity = -1
+                verbose_flag = ctx.params.get('verbose', 0)
+                quiet_flag = ctx.params.get('quiet', False)
+                if quiet_flag:
+                    verbosity = -1
+                elif verbose_flag > 0:
+                    verbosity = verbose_flag
+                elif ctx.parent: # Check parent context if flags not on current command
+                     parent_verbose = ctx.parent.params.get('verbose', 0)
+                     parent_quiet = ctx.parent.params.get('quiet', False)
+                     if parent_quiet: verbosity = -1
+                     elif parent_verbose > 0: verbosity = parent_verbose
+
                 setup_logging(config, verbosity)
                 logger.debug("Logging setup complete in ConfigGroup.")
             else:
@@ -78,45 +89,42 @@ class ConfigGroup(click.Group):
                 plugins_loaded_here = True
                 logger.debug("Plugin system initialized and loaded.")
             else:
-                plugin_loader = ctx.obj['plugin_loader']
-                plugin_registry = ctx.obj['plugin_registry']
+                # Ensure global vars are updated if context already has them
+                # (might happen in nested groups, though less likely with current structure)
+                if 'plugin_loader' in ctx.obj: plugin_loader = ctx.obj['plugin_loader']
+                if 'plugin_registry' in ctx.obj: plugin_registry = ctx.obj['plugin_registry']
                 logger.debug("Plugin system already initialized in context.")
 
             setup_success = True # Mark setup as successful before invoking command
 
-            # 4. Proceed with the actual group/command invocation
+            # --- Command Execution Phase ---
+            # Let exceptions from super().invoke() propagate up to Click/CliRunner
             return super().invoke(ctx)
 
         except click.exceptions.Exit as e:
             # Let Click handle --help, ctx.exit(), etc. cleanly
             raise e
-        except click.ClickException as e:
-            # Handle known Click errors originating from commands (UsageError, MissingParameter, Abort etc.)
-            # Log the error, show the user-friendly message via Click, and re-raise.
-            # The test runner with catch_exceptions=True should capture the original exception.
-            logger.error(f"Command error: {e.__class__.__name__} - {e}", exc_info=True) # Log with traceback
-            e.show() # Print the error message to stderr as Click would
-            # Re-raise the original Click exception.
-            # Click's default handling or the test runner will manage the exit code.
-            raise e
         except Exception as e:
-            # Handle truly unexpected errors (likely bugs in setup or command)
-            error_logger = logging.getLogger("sygnals.error") # Use a general error logger
-            if setup_success:
-                # Error occurred *during* command execution
-                error_logger.critical(f"Unexpected error during command execution: {repr(e)}", exc_info=True)
-                print(f"CRITICAL UNEXPECTED ERROR: {repr(e)}", file=sys.stderr)
-            else:
-                # Error occurred during setup (config/log/plugin)
+            # Handle ONLY unexpected errors during the SETUP phase
+            if not setup_success:
+                error_logger = logging.getLogger("sygnals.error")
                 error_logger.critical(f"Critical error during CLI setup: {repr(e)}", exc_info=True)
+                # Print basic error to stderr as logging might not be fully set up
                 print(f"CRITICAL SETUP ERROR: {repr(e)}", file=sys.stderr)
-
-            # Exit with non-zero code for unexpected errors
-            ctx.exit(1)
+                # Exit with non-zero code for setup errors
+                ctx.exit(1)
+            else:
+                # If setup was successful, errors during command execution
+                # should have been allowed to propagate. This block might
+                # not be reached unless super().invoke() itself raises
+                # an unexpected non-Click exception.
+                error_logger = logging.getLogger("sygnals.error")
+                error_logger.critical(f"Unexpected error during command invocation (after setup): {repr(e)}", exc_info=True)
+                # Re-raise the original exception to let Click/CliRunner handle it
+                raise
 
 
 # --- Common CLI Options ---
-# (Keep verbose_option and quiet_option as defined before)
 verbose_option = click.option(
     '-v', '--verbose',
     count=True,

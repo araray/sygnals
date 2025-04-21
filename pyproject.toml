@@ -106,9 +106,9 @@ ignore_missing_imports = true # Start permissive, tighten later
 # ignore_errors = true
 
 [tool.pytest.ini_options]
-minversion = "7.0" # Relaxed lower bound slightly from 8.0
-addopts = "-ra -q --log-cli-level=INFO" # Add default log level for tests
+minversion = "8.0" # Relaxed lower bound slightly from 8.0
+addopts = "-ra -q" # Add default log level for tests
 testpaths = [
     "tests",
 ]
-log_cli = true # Enable log capture during tests
+#log_cli = true # Enable log capture during tests

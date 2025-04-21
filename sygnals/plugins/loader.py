@@ -51,7 +51,8 @@ def _find_manifest_for_module(module) -> Optional[Path]:
         if manifest_path.is_file():
             logger.debug(f"Found manifest for module {module.__name__} at {manifest_path}")
             return manifest_path
-        if current_dir.parent == current_dir: # Reached root
+        # Stop if we reach the filesystem root or a known project boundary
+        if current_dir.parent == current_dir or (current_dir / '.git').exists() or (current_dir / 'pyproject.toml').exists():
             break
         current_dir = current_dir.parent
 
@@ -106,25 +107,27 @@ def _import_plugin_entry_point(entry_point_str: str, manifest_path: Optional[Pat
     Imports the plugin's entry point class.
     Handles temporary sys.path modification for local plugins if manifest_path is provided.
     """
-    module_str, class_name = entry_point_str.split(':')
+    if ':' not in entry_point_str:
+        logger.error(f"Invalid entry_point format '{entry_point_str}'. Expected 'module.path:ClassName'.")
+        return None
+
+    module_str, class_name = entry_point_str.rsplit(':', 1) # Use rsplit for safety
     plugin_root_dir = manifest_path.parent if manifest_path else None
-    needs_path_update = False
+    path_to_add = None
     original_sys_path = list(sys.path) # Store original path
 
     try:
-        # If it's a local plugin, temporarily add its root to sys.path
-        # to handle potential relative imports within the plugin code.
-        if plugin_root_dir and str(plugin_root_dir) not in sys.path:
-            # Also add the directory *containing* the plugin root,
-            # in case the entry point is like 'plugin_pkg.submodule:Class'
-            # and the plugin root itself is not directly importable.
-            container_dir = plugin_root_dir.parent
-            if str(container_dir) not in sys.path:
-                 sys.path.insert(0, str(container_dir))
-                 needs_path_update = True
-                 logger.debug(f"Temporarily added {container_dir} to sys.path for plugin import.")
-            # No longer adding plugin_root_dir directly, rely on container dir
+        # If it's a local plugin (manifest_path is provided), temporarily add its root dir
+        # to sys.path to allow imports relative to the plugin root.
+        if plugin_root_dir:
+            path_to_add = str(plugin_root_dir)
+            if path_to_add not in sys.path:
+                sys.path.insert(0, path_to_add)
+                logger.debug(f"Temporarily added {path_to_add} to sys.path for local plugin import.")
+            else:
+                path_to_add = None # Already in path, no need to remove later
 
+        # Attempt to import the module
         module = importlib.import_module(module_str)
         plugin_class = getattr(module, class_name, None)
 
@@ -149,15 +152,12 @@ def _import_plugin_entry_point(entry_point_str: str, manifest_path: Optional[Pat
         return None
     finally:
         # Restore original sys.path if it was modified
-        if needs_path_update:
-             # Check if the path is still there before removing
-             if container_dir and str(container_dir) in sys.path and sys.path[0] == str(container_dir):
-                  sys.path.pop(0)
-                  logger.debug(f"Removed {container_dir} from sys.path.")
-             else:
-                  # Restore from original if something went wrong
-                  logger.warning(f"sys.path was modified unexpectedly during import of {module_str}. Restoring original path.")
-                  sys.path = original_sys_path
+        if path_to_add and path_to_add in sys.path and sys.path[0] == path_to_add:
+             sys.path.pop(0)
+             logger.debug(f"Removed {path_to_add} from sys.path.")
+        elif path_to_add: # If path_to_add was set but wasn't found at index 0
+             logger.warning(f"sys.path was modified unexpectedly during import of {module_str}. Restoring original path.")
+             sys.path = original_sys_path
 
 
 # --- Plugin State Management (Basic) ---
@@ -183,6 +183,8 @@ def _save_plugin_state(config_dir: Path, state: Dict[str, bool]):
     """Saves enabled/disabled state."""
     state_file = config_dir / PLUGIN_STATE_FILENAME
     try:
+        # Ensure state directory exists
+        config_dir.mkdir(parents=True, exist_ok=True)
         # Format for saving: {'plugin_name': {'enabled': True/False}, ...}
         save_data = {name: {'enabled': enabled} for name, enabled in state.items()}
         with open(state_file, 'w', encoding='utf-8') as f:
