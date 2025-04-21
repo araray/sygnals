@@ -6,6 +6,7 @@ import numpy as np
 from numpy.testing import assert_array_equal, assert_allclose
 import json
 from pathlib import Path
+from unittest.mock import MagicMock # Import MagicMock for mocking plugin handlers
 
 # Import functions to test
 from sygnals.core.data_handler import (
@@ -14,9 +15,10 @@ from sygnals.core.data_handler import (
     SUPPORTED_READ_FORMATS, SUPPORTED_WRITE_FORMATS # Import constants
 )
 # Import audio I/O constants for checking
-# FIX: Changed imported names to match those defined in sygnals.core.audio.io
 from sygnals.core.audio.io import SUPPORTED_READ_EXTENSIONS as AUDIO_READ_EXTENSIONS
 from sygnals.core.audio.io import SUPPORTED_WRITE_EXTENSIONS as AUDIO_WRITE_EXTENSIONS
+# Import PluginRegistry for testing integration
+from sygnals.plugins.api import PluginRegistry
 
 # --- Test read_data ---
 
@@ -25,6 +27,7 @@ def test_read_csv(tmp_path: Path):
     csv_file = tmp_path / "test.csv"
     csv_content = "time,value\n0,1.0\n1,2.0\n2,3.0\n"
     csv_file.write_text(csv_content)
+    # Test without registry
     data = read_data(csv_file)
     assert isinstance(data, pd.DataFrame)
     assert len(data) == 3
@@ -83,7 +86,9 @@ def test_read_audio_delegation(tmp_path: Path, mocker):
     mock_load_audio = mocker.patch("sygnals.core.data_handler.load_audio_file", return_value=(dummy_audio / 2, target_sr)) # Simulate resampling
 
     # Call read_data with the WAV file path and target SR
-    result_data, result_sr = read_data(wav_file, sr=target_sr)
+    result = read_data(wav_file, sr=target_sr)
+    assert isinstance(result, tuple) # Ensure it returns a tuple
+    result_data, result_sr = result # Unpack tuple
 
     # Assert that the mock was called correctly with the target SR
     mock_load_audio.assert_called_once_with(wav_file, sr=target_sr)
@@ -223,26 +228,26 @@ def test_save_type_format_mismatch(tmp_path: Path):
     # Numpy array to JSON
     arr = np.arange(5)
     out_file_json = tmp_path / "out.json"
-    with pytest.raises(ValueError, match="Cannot save single NumPy array directly to format '.json'"):
+    with pytest.raises(ValueError, match="Cannot save single NumPy array directly to core format '.json'"):
         save_data(arr, out_file_json)
 
     # Dict of arrays to CSV
     data_dict = {"arr1": np.arange(5)}
     out_file_csv = tmp_path / "out.csv"
-    with pytest.raises(ValueError, match="Cannot save dictionary of NumPy arrays to format '.csv'"):
+    with pytest.raises(ValueError, match="Cannot save dictionary of NumPy arrays to core format '.csv'"):
         save_data(data_dict, out_file_csv)
 
     # Audio tuple to NPZ
     audio_tuple = (np.zeros(10), 8000)
     out_file_npz = tmp_path / "out.npz"
-    with pytest.raises(ValueError, match="Cannot save audio data tuple to non-audio format '.npz'"):
+    with pytest.raises(ValueError, match="Cannot save audio data tuple to non-audio core format '.npz'"):
         save_data(audio_tuple, out_file_npz)
 
 def test_save_unsupported_data_type(tmp_path: Path):
     """Test saving an unsupported data type."""
     unsupported_data = [1, 2, 3] # Python list
     out_file = tmp_path / "out.csv"
-    with pytest.raises(TypeError, match="Unsupported data type for saving: <class 'list'>"):
+    with pytest.raises(TypeError, match="Unsupported data type for core saving handlers: <class 'list'>"):
         save_data(unsupported_data, out_file)
 
 
@@ -282,7 +287,6 @@ def test_run_sql_query(sample_filter_df):
     res = run_sql_query(df, query)
     # Create expected result without index for comparison
     expected_df = pd.DataFrame({"time": [4, 0, 2], "value": [15, 10, 5]})
-    # FIX: Reset index on both DataFrames before comparison
     pd.testing.assert_frame_equal(res.reset_index(drop=True), expected_df.reset_index(drop=True))
 
 def test_run_sql_query_invalid_query(sample_filter_df):
@@ -290,7 +294,6 @@ def test_run_sql_query_invalid_query(sample_filter_df):
     df = sample_filter_df
     query = "SELECT non_existent_col FROM df"
     # pandasql raises PandaSQLException which often wraps sqlite3.OperationalError
-    # Match broadly for robustness
     with pytest.raises(RuntimeError, match="SQL query execution failed"):
         run_sql_query(df, query)
 
@@ -298,3 +301,101 @@ def test_run_sql_query_wrong_type():
     """Test SQL query with non-DataFrame input."""
     with pytest.raises(TypeError):
         run_sql_query([1, 2, 3], "SELECT * FROM df") # type: ignore
+
+
+# --- Tests for Plugin Integration ---
+
+@pytest.fixture
+def mock_registry(mocker) -> PluginRegistry:
+    """Creates a mock PluginRegistry."""
+    registry = PluginRegistry()
+    # Add spy methods if needed, or just use MagicMock for handlers
+    return registry
+
+def test_read_data_uses_plugin_reader(tmp_path: Path, mock_registry: PluginRegistry, mocker):
+    """Test read_data calls plugin reader for registered extension."""
+    custom_file = tmp_path / "data.custom"
+    custom_file.touch()
+    expected_result = {"plugin_data": np.array([1, 2, 3])}
+
+    # Create a mock reader function
+    mock_reader = MagicMock(return_value=expected_result)
+    # Register the mock reader
+    mock_registry.add_reader(".custom", mock_reader)
+
+    # Mock core handlers to ensure they are NOT called
+    mock_read_csv = mocker.patch("pandas.read_csv")
+    mock_load_audio = mocker.patch("sygnals.core.data_handler.load_audio_file")
+    mock_np_load = mocker.patch("numpy.load")
+
+    # Call read_data with the registry
+    result = read_data(custom_file, registry=mock_registry)
+
+    # Assertions
+    mock_reader.assert_called_once_with(path=custom_file)
+    assert result == expected_result
+    mock_read_csv.assert_not_called()
+    mock_load_audio.assert_not_called()
+    mock_np_load.assert_not_called()
+
+def test_save_data_uses_plugin_writer(tmp_path: Path, mock_registry: PluginRegistry, mocker):
+    """Test save_data calls plugin writer for registered extension."""
+    dummy_data = pd.DataFrame({'a': [1]})
+    out_file = tmp_path / "output.custom"
+    kwargs_to_pass = {'sr': 16000, 'audio_subtype': 'FLOAT'}
+
+    # Create a mock writer function
+    mock_writer = MagicMock()
+    # Register the mock writer
+    mock_registry.add_writer(".custom", mock_writer)
+
+    # Mock core handlers to ensure they are NOT called
+    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv")
+    mock_save_audio = mocker.patch("sygnals.core.data_handler.save_audio_file")
+    mock_np_savez = mocker.patch("numpy.savez")
+
+    # Call save_data with the registry
+    save_data(dummy_data, out_file, registry=mock_registry, **kwargs_to_pass)
+
+    # Assertions
+    mock_writer.assert_called_once_with(dummy_data, out_file, **kwargs_to_pass)
+    mock_to_csv.assert_not_called()
+    mock_save_audio.assert_not_called()
+    mock_np_savez.assert_not_called()
+
+def test_read_data_fallback_to_core(tmp_path: Path, mock_registry: PluginRegistry, mocker):
+    """Test read_data falls back to core handler if no plugin reader exists."""
+    csv_file = tmp_path / "fallback.csv"
+    csv_content = "col\nval1\nval2"
+    csv_file.write_text(csv_content)
+    expected_df = pd.DataFrame({'col': ['val1', 'val2']})
+
+    # Mock the core reader to ensure it's called
+    mock_read_csv = mocker.patch("pandas.read_csv", return_value=expected_df)
+    # Ensure no reader is registered for .csv in the mock registry
+    assert mock_registry.get_reader(".csv") is None
+
+    # Call read_data with the registry
+    result = read_data(csv_file, registry=mock_registry)
+
+    # Assertions
+    mock_read_csv.assert_called_once_with(csv_file)
+    pd.testing.assert_frame_equal(result, expected_df)
+
+
+def test_save_data_fallback_to_core(tmp_path: Path, mock_registry: PluginRegistry, mocker):
+    """Test save_data falls back to core handler if no plugin writer exists."""
+    df_to_save = pd.DataFrame({'a': [5, 6]})
+    out_file = tmp_path / "fallback.csv"
+
+    # Mock the core writer to ensure it's called
+    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv")
+    # Ensure no writer is registered for .csv in the mock registry
+    assert mock_registry.get_writer(".csv") is None
+
+    # Call save_data with the registry
+    save_data(df_to_save, out_file, registry=mock_registry)
+
+    # Assertions
+    # The first arg to to_csv is the instance (df_to_save), second is path
+    mock_to_csv.assert_called_once_with(out_file, index=False)
