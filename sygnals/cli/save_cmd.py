@@ -11,9 +11,9 @@ import pandas as pd
 from pathlib import Path
 import json # For parsing dict options
 from typing import Optional, List, Tuple, Any, Dict, Union
+import warnings # Import warnings
 
 # Import core components
-# Need read_data here to potentially load segment info
 from sygnals.core.data_handler import read_data, save_data, ReadResult, NDArray
 # Import formatters
 from sygnals.core.ml_utils.formatters import (
@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 # --- Helper to parse shape string ---
 def _parse_shape(ctx, param, value: Optional[str]) -> Optional[Tuple[int, int]]:
+    """Parses a 'height,width' string into a tuple of integers."""
     if value is None:
         return None
     try:
@@ -39,6 +40,7 @@ def _parse_shape(ctx, param, value: Optional[str]) -> Optional[Tuple[int, int]]:
 
 # --- Helper to parse aggregation JSON ---
 def _parse_aggregation(ctx, param, value: Optional[str]) -> Union[str, Dict[str, str]]:
+    """Parses aggregation option, accepting a string method or a JSON dict string."""
     if value is None or not value.strip().startswith('{'):
         return value or 'mean' # Return string if not JSON dict, default to 'mean'
     try:
@@ -148,12 +150,17 @@ def save_dataset(
                  # Assume all numeric columns (excluding potential 'time' index/column) are features
                  if 'time' in data_result.columns:
                      features_dict = {col: data_result[col].values.astype(np.float64) for col in data_result.columns if col != 'time' and pd.api.types.is_numeric_dtype(data_result[col])}
-                 else:
+                 elif isinstance(data_result.index, (pd.TimedeltaIndex, pd.DatetimeIndex, pd.PeriodIndex)):
+                      # Handle time index if 'time' column is not present
                       features_dict = {col: data_result[col].values.astype(np.float64) for col in data_result.columns if pd.api.types.is_numeric_dtype(data_result[col])}
+                 else:
+                      # Assume no time column/index, use all numeric columns
+                      features_dict = {col: data_result[col].values.astype(np.float64) for col in data_result.columns if pd.api.types.is_numeric_dtype(data_result[col])}
+
                  if not features_dict:
                       raise ValueError("No suitable numeric feature columns found in input DataFrame.")
             elif isinstance(data_result, dict):
-                 # Assume dict contains 1D feature arrays
+                 # Assume dict contains 1D feature arrays, filter out non-1D arrays
                  features_dict = {k: v.astype(np.float64) for k, v in data_result.items() if isinstance(v, np.ndarray) and v.ndim == 1}
                  if not features_dict:
                       raise ValueError("No suitable 1D feature arrays found in input dictionary (NPZ).")
@@ -163,6 +170,7 @@ def save_dataset(
 
             # Read segment info (assume CSV with 'start_frame', 'end_frame')
             try:
+                # FIX: Explicitly use pandas.read_csv
                 segment_df = pd.read_csv(segment_info)
                 if not {'start_frame', 'end_frame'}.issubset(segment_df.columns):
                     raise ValueError("Segment info file must contain 'start_frame' and 'end_frame' columns.")
@@ -186,11 +194,13 @@ def save_dataset(
             if not isinstance(data_result, (dict, pd.DataFrame)):
                  raise click.UsageError(f"Input data type {type(data_result)} not suitable for 'sequences' assembly. Expected dict of 1D arrays (from NPZ) or DataFrame.")
 
-            # Convert DataFrame to dict of 1D arrays if necessary
+            # Convert DataFrame/Dict to dict of 1D arrays
             features_dict_seq: Dict[str, NDArray[np.float64]]
             if isinstance(data_result, pd.DataFrame):
                  if 'time' in data_result.columns:
                      features_dict_seq = {col: data_result[col].values.astype(np.float64) for col in data_result.columns if col != 'time' and pd.api.types.is_numeric_dtype(data_result[col])}
+                 elif isinstance(data_result.index, (pd.TimedeltaIndex, pd.DatetimeIndex, pd.PeriodIndex)):
+                      features_dict_seq = {col: data_result[col].values.astype(np.float64) for col in data_result.columns if pd.api.types.is_numeric_dtype(data_result[col])}
                  else:
                       features_dict_seq = {col: data_result[col].values.astype(np.float64) for col in data_result.columns if pd.api.types.is_numeric_dtype(data_result[col])}
                  if not features_dict_seq:
@@ -204,8 +214,6 @@ def save_dataset(
 
             # Call formatter
             # Force output to be suitable for saving (e.g., padded array for NPZ)
-            # If saving as CSV/JSON, a list of arrays is problematic.
-            # Let's default to padded_array for CLI use.
             formatter_output = format_feature_sequences(
                 features_dict=features_dict_seq,
                 max_sequence_length=max_sequence_length,
@@ -215,9 +223,8 @@ def save_dataset(
             )
             # formatter_output is shape (1, seq_len, n_features)
             # Save as dict for NPZ, or potentially reshape/convert for CSV/JSON?
-            # For now, assume saving to NPZ is most common for sequences.
             if output_path.suffix.lower() != '.npz':
-                 logger.warning(f"Saving sequence data (shape {formatter_output.shape}) to non-NPZ format '{output_path.suffix}'. Result might be unexpected.")
+                 logger.warning(f"Saving sequence data (shape {formatter_output.shape}) to non-NPZ format '{output_path.suffix}'. Result might be unexpected. Saving first sequence as 2D array.")
                  # Save the first (only) sequence as a 2D array if not NPZ
                  if formatter_output.shape[0] == 1:
                       data_to_save = formatter_output[0] # Save as (seq_len, n_features)
@@ -237,7 +244,11 @@ def save_dataset(
                 # Assume DataFrame contains the 2D feature map (e.g., spectrogram)
                 # Try converting directly, assuming all columns are numeric parts of the map
                 try:
-                    feature_map = data_result.select_dtypes(include=np.number).values.astype(np.float64)
+                    # Select only numeric columns for the map
+                    numeric_df = data_result.select_dtypes(include=np.number)
+                    if numeric_df.empty:
+                        raise ValueError("DataFrame contains no numeric columns to form a feature map.")
+                    feature_map = numeric_df.values.astype(np.float64)
                     if feature_map.ndim != 2 or feature_map.size == 0:
                          raise ValueError("DataFrame does not represent a valid 2D feature map.")
                 except Exception as e:
@@ -281,7 +292,8 @@ def save_dataset(
         raise click.UsageError(f"Input file not found: {input_path}")
     except (ValueError, TypeError, click.UsageError) as e:
         # Catch specific errors from formatters or data handling
+        logger.error(f"Error during dataset assembly/saving: {e}", exc_info=True) # Log traceback for these errors
         raise click.UsageError(f"Error during dataset assembly/saving: {e}")
     except Exception as e:
         logger.error(f"An unexpected error occurred during dataset saving: {e}", exc_info=True)
-        raise click.Abort(f"An unexpected error occurred: {e}")
+        raise click.Abort(f"An unexpected error occurred: {e}") # Use Abort for unexpected errors
