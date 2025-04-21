@@ -1,0 +1,114 @@
+# pyproject.toml
+
+[build-system]
+requires = ["setuptools>=78.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sygnals"
+version = "1.0.0"
+description = "A versatile command-line toolkit for signal and audio processing, tailored for data science workflows."
+readme = "README.md"
+authors = [
+  { name="Araray Velho", email="araray@gmail.com" },
+]
+license = { file="LICENSE" }
+requires-python = ">=3.11"
+classifiers = [
+    "Development Status :: 3 - Alpha", # Initial development phase
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13", # Assuming support up to 3.13
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Utilities",
+]
+keywords = ["signal processing", "audio processing", "dsp", "data science", "cli", "feature engineering", "machine learning"]
+
+# Core dependencies from requirements.txt + additions from spec
+dependencies = [
+    "numpy>=1.22.0", # Relaxed lower bound slightly from 2.2.4 if needed
+    "scipy>=1.8.0", # Relaxed lower bound slightly from 1.15.2 if needed
+    "pandas>=1.4.0", # Relaxed lower bound slightly from 2.2.3 if needed
+    "pandasql", # Keep for now, might be refactored later
+    "librosa>=0.10.0", # Relaxed lower bound slightly from 0.11.0 if needed
+    "soundfile>=0.12.0", # Relaxed lower bound slightly from 0.13.1 if needed
+    "matplotlib>=3.5.0", # Relaxed lower bound slightly from 3.10.1 if needed
+    "click>=8.1.0", # Relaxed lower bound slightly from 8.1.8 if needed
+    "tabulate>=0.9.0",
+    "pywavelets>=1.3.0", # Relaxed lower bound slightly from 1.8.0 if needed
+    "rich>=13.0.0", # Relaxed lower bound slightly from 14.0.0 if needed
+    "pydantic>=2.0.0", # Use Pydantic v2
+    "toml>=0.10.2",
+    "packaging>=21.0", # For plugin version comparisons
+    "resampy>=0.4.0", # Added dependency for librosa resampling
+    "scikit-learn>=1.1.0", # Added for ML utilities (scaling) - Relaxed lower bound from 1.5.1
+    # "openpyxl", # Only needed if dealing with Excel files, removed for now
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0", # Relaxed lower bound slightly from 8.3.5
+    "pytest-mock>=3.10.0", # Relaxed lower bound slightly from 3.14.0
+    "mypy>=1.0.0", # Relaxed lower bound slightly from 1.15.0
+    "flake8>=6.0.0", # Relaxed lower bound slightly from 7.2.0
+    "black>=23.0.0", # Relaxed lower bound slightly from 25.1.0
+    "isort>=5.10.0", # Relaxed lower bound slightly from 6.0.1
+    "ipykernel", # For notebooks if used in examples/
+    "types-toml", # Type hints for toml library
+    # Add plugin deps here for dev environment convenience
+    "pyarrow>=7.0.0",
+    "h5py>=3.1.0",
+]
+# Optional dependencies specifically for plugins
+plugins = [
+    "pyarrow>=7.0.0", # For Parquet plugin
+    "h5py>=3.1.0",    # For HDF5 plugin
+]
+
+[project.urls]
+Homepage = "https://github.com/araray/sygnals"
+Repository = "https://github.com/araray/sygnals"
+# Documentation = "..." # Add later
+
+[project.scripts]
+sygnals = "sygnals.cli.main:cli" # Entry point for the CLI
+
+[tool.setuptools]
+# Include package data if needed later (e.g., default configs, templates)
+# package-data = {"sygnals" = ["py.typed", "config/defaults.toml"]}
+# Automatically find packages under the 'sygnals' directory
+packages = ["sygnals"] # Explicitly list top-level package
+
+
+# --- Tool Configurations (Optional but Recommended) ---
+
+[tool.black]
+line-length = 88
+target-version = ['py311', 'py312', 'py313']
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true # Start permissive, tighten later
+# Add specific ignores if needed, e.g., for optional imports
+# [[tool.mypy.overrides]]
+# module = "sygnals.core.ml_utils.scaling"
+# ignore_errors = true
+
+[tool.pytest.ini_options]
+minversion = "8.0" # Relaxed lower bound slightly from 8.0
+addopts = "-ra -q" # Add default log level for tests
+testpaths = [
+    "tests",
+]
+#log_cli = true # Enable log capture during tests
