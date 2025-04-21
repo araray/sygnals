@@ -1,0 +1,26 @@
+# Plugin Manifest for 'sygnals-parquet'
+# Provides Parquet file format support for Sygnals.
+
+# Unique plugin identifier (lowercase, hyphens allowed)
+name = "sygnals-parquet"
+
+# Plugin version (Semantic Versioning)
+version = "0.1.0"
+
+# Sygnals core API compatibility range (PEP 440 specifier)
+# Assumes compatibility with Sygnals v1.x starting from 1.0.0
+sygnals_api = ">=1.0.0,<2.0.0"
+
+# Human-readable summary of the plugin's purpose
+description = "Adds support for reading and writing Apache Parquet files."
+
+# Path to the main plugin class implementing SygnalsPluginBase
+# Format: <python_module_path>:<ClassName>
+entry_point = "sygnals_parquet.plugin:SygnalsParquetPlugin"
+
+# Optional: List of additional Python package dependencies required by this plugin
+# Actual installation dependencies are managed in pyproject.toml.
+# dependencies = [
+#     "pandas",
+#     "pyarrow"
+# ]
