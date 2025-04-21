@@ -17,7 +17,8 @@ import toml
 from packaging.specifiers import SpecifierSet, InvalidSpecifier
 from packaging.version import Version, InvalidVersion
 
-from sygnals.config import SygnalsConfig
+# Import necessary types and classes from within sygnals
+from sygnals.config.models import SygnalsConfig # Use the correct config model import
 from sygnals.version import __version__ as core_version
 
 # Import from the same package
@@ -114,9 +115,15 @@ def _import_plugin_entry_point(entry_point_str: str, manifest_path: Optional[Pat
         # If it's a local plugin, temporarily add its root to sys.path
         # to handle potential relative imports within the plugin code.
         if plugin_root_dir and str(plugin_root_dir) not in sys.path:
-            sys.path.insert(0, str(plugin_root_dir))
-            needs_path_update = True
-            logger.debug(f"Temporarily added {plugin_root_dir} to sys.path for plugin import.")
+            # Also add the directory *containing* the plugin root,
+            # in case the entry point is like 'plugin_pkg.submodule:Class'
+            # and the plugin root itself is not directly importable.
+            container_dir = plugin_root_dir.parent
+            if str(container_dir) not in sys.path:
+                 sys.path.insert(0, str(container_dir))
+                 needs_path_update = True
+                 logger.debug(f"Temporarily added {container_dir} to sys.path for plugin import.")
+            # No longer adding plugin_root_dir directly, rely on container dir
 
         module = importlib.import_module(module_str)
         plugin_class = getattr(module, class_name, None)
@@ -125,6 +132,7 @@ def _import_plugin_entry_point(entry_point_str: str, manifest_path: Optional[Pat
             logger.error(f"Entry point class '{class_name}' not found in module '{module_str}' "
                          f"(manifest: {manifest_path}).")
             return None
+        # Check inheritance using issubclass
         if not issubclass(plugin_class, SygnalsPluginBase):
             logger.error(f"Entry point class '{entry_point_str}' does not inherit from SygnalsPluginBase "
                          f"(manifest: {manifest_path}).")
@@ -143,9 +151,9 @@ def _import_plugin_entry_point(entry_point_str: str, manifest_path: Optional[Pat
         # Restore original sys.path if it was modified
         if needs_path_update:
              # Check if the path is still there before removing
-             if str(plugin_root_dir) in sys.path and sys.path[0] == str(plugin_root_dir):
+             if container_dir and str(container_dir) in sys.path and sys.path[0] == str(container_dir):
                   sys.path.pop(0)
-                  logger.debug(f"Removed {plugin_root_dir} from sys.path.")
+                  logger.debug(f"Removed {container_dir} from sys.path.")
              else:
                   # Restore from original if something went wrong
                   logger.warning(f"sys.path was modified unexpectedly during import of {module_str}. Restoring original path.")
@@ -252,12 +260,15 @@ class PluginLoader:
         # 6. Call registration hooks
         try:
             logger.debug(f"Registering extensions for plugin '{plugin_name}'...")
+            # Call all registration hooks, including the new ones
             plugin_instance.register_filters(self.registry)
             plugin_instance.register_transforms(self.registry)
             plugin_instance.register_feature_extractors(self.registry)
             plugin_instance.register_visualizations(self.registry)
             plugin_instance.register_audio_effects(self.registry)
             plugin_instance.register_augmenters(self.registry)
+            plugin_instance.register_data_readers(self.registry) # Call new reader hook
+            plugin_instance.register_data_writers(self.registry) # Call new writer hook
             plugin_instance.register_cli_commands(self.registry)
         except Exception as e:
             logger.error(f"Error during registration hooks for plugin '{plugin_name}': {e}", exc_info=True)
