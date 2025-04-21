@@ -1,0 +1,27 @@
+# Plugin Manifest for 'sygnals-hdf5'
+# Provides HDF5 file format support for Sygnals.
+
+# Unique plugin identifier (lowercase, hyphens allowed)
+name = "sygnals-hdf5"
+
+# Plugin version (Semantic Versioning)
+version = "0.1.0"
+
+# Sygnals core API compatibility range (PEP 440 specifier)
+# Assumes compatibility with Sygnals v1.x starting from 1.0.0
+sygnals_api = ">=1.0.0,<2.0.0"
+
+# Human-readable summary of the plugin's purpose
+description = "Adds support for reading and writing HDF5 files (basic dataset support)."
+
+# Path to the main plugin class implementing SygnalsPluginBase
+# Format: <python_module_path>:<ClassName>
+entry_point = "sygnals_hdf5.plugin:SygnalsHdf5Plugin"
+
+# Optional: List of additional Python package dependencies required by this plugin
+# Actual installation dependencies are managed in pyproject.toml.
+# dependencies = [
+#     "h5py",
+#     "numpy",
+#     "pandas" # If handling DataFrames directly
+# ]

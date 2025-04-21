@@ -1,0 +1,38 @@
+# pyproject.toml for the 'sygnals-hdf5' Sygnals plugin
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sygnals-hdf5"
+version = "0.1.0" # Should match plugin.toml
+description = "Adds support for reading and writing HDF5 files (basic dataset support)." # Should match plugin.toml
+# readme = "README.md" # Optional
+authors = [
+   { name="Sygnals Contributor", email="email@example.com" }, # Add your details
+]
+license = { text="Apache-2.0" } # Or choose another license
+requires-python = ">=3.8" # Match Sygnals core requirement
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License", # Match license choice
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering",
+]
+keywords = ["sygnals", "plugin", "hdf5", "h5", "data handling"]
+
+# --- Plugin Dependencies ---
+dependencies = [
+    # Requires h5py for HDF5 I/O
+    "h5py>=3.1.0", # Specify a reasonable minimum h5py version
+    "numpy>=1.20.0", # Generally needed for data handling
+    "pandas>=1.3.0", # Needed if save function handles DataFrames
+]
+
+# [project.urls] # Optional
+
+# --- Entry Point for Sygnals Plugin Discovery ---
+[project.entry-points."sygnals.plugins"]
+sygnals-hdf5 = "sygnals_hdf5.plugin:SygnalsHdf5Plugin"
