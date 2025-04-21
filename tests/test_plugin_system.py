@@ -51,7 +51,7 @@ def base_config(tmp_path: Path) -> SygnalsConfig:
         log_directory=tmp_path / "sygnals_logs"
     )
     # Store state dir path separately for easy access in tests
-    config._test_state_dir = state_dir_path # Add temporary attribute for test use
+    setattr(config, '_test_state_dir', state_dir_path) # Use setattr to add temporary attribute
     return config
 
 @pytest.fixture
@@ -123,12 +123,12 @@ description = "A dummy test plugin: {name}"
 entry_point = "{entry_point_path}"
 dependencies = {dependencies}
 """
-    (plugin_root / "plugin.toml").write_text(manifest_content)
+    (plugin_root / "plugin.toml").write_text(manifest_content, encoding='utf-8')
 
     # Python package structure
     package_dir = plugin_root / entry_module
     package_dir.mkdir()
-    (package_dir / "__init__.py").touch()
+    (package_dir / "__init__.py").write_text(f"# Init for {package_name}", encoding='utf-8')
 
     # plugin.py (entry point)
     hook_implementations = ""
@@ -148,7 +148,11 @@ import logging
 from sygnals.plugins.api import SygnalsPluginBase, PluginRegistry
 # Add common imports needed by hook code snippets
 import numpy as np
+from pathlib import Path # Add Path import
+import pandas as pd # Add pandas import
 def dummy_callable(*args, **kwargs): pass # Simple callable for registration
+def dummy_reader(path, **kwargs): return {{'data': np.array([1])}} # Simple reader
+def dummy_writer(data, path, **kwargs): pass # Simple writer
 
 logger = logging.getLogger(__name__)
 
@@ -165,7 +169,7 @@ class {class_name}(SygnalsPluginBase):
 
 {entry_point_content} # Add extra content if needed
 """
-    (package_dir / "plugin.py").write_text(plugin_py_content)
+    (package_dir / "plugin.py").write_text(plugin_py_content, encoding='utf-8')
 
     # pyproject.toml (optional, for entry point testing if needed)
     if create_pyproject:
@@ -181,7 +185,7 @@ version = "{version}"
 [project.entry-points."sygnals.plugins"]
 {name} = "{entry_point_path}"
 """
-         (plugin_root / "pyproject.toml").write_text(pyproject_content)
+         (plugin_root / "pyproject.toml").write_text(pyproject_content, encoding='utf-8')
 
     # Update state file if needed (emulate enable/disable)
     # Use the provided state_dir
@@ -197,7 +201,7 @@ version = "{version}"
 def test_load_valid_local_plugin_registration(plugin_loader: PluginLoader, base_config: SygnalsConfig, teardown_sys_path):
     """Test loading a plugin and verify its registration hook is called."""
     plugin_dir = base_config.paths.plugin_dir
-    state_dir = base_config._test_state_dir # Get state dir from config fixture
+    state_dir = getattr(base_config, '_test_state_dir') # Get state dir from config fixture
     plugin_name = "test-register-filter"
     # Define the registration code snippet
     hook_code = 'registry.add_filter("my_test_filter", dummy_callable)'
@@ -215,10 +219,9 @@ def test_load_valid_local_plugin_registration(plugin_loader: PluginLoader, base_
 def test_load_plugin_registering_multiple_types(plugin_loader: PluginLoader, base_config: SygnalsConfig, teardown_sys_path):
     """Test loading a plugin that registers multiple extension types."""
     plugin_dir = base_config.paths.plugin_dir
-    state_dir = base_config._test_state_dir
+    state_dir = getattr(base_config, '_test_state_dir')
     plugin_name = "test-multi-register"
     hooks = {
-        # FIX: Use correct hook name 'register_feature_extractors'
         "register_feature_extractors": 'registry.add_feature("multi_feature", lambda x: x+1)',
         "register_transforms": 'registry.add_transform("multi_transform", lambda x: x*2)'
     }
@@ -239,12 +242,11 @@ def test_load_plugin_registering_multiple_types(plugin_loader: PluginLoader, bas
 def test_load_multiple_plugins_registration(plugin_loader: PluginLoader, base_config: SygnalsConfig, teardown_sys_path):
     """Test loading multiple plugins and check combined registry content."""
     plugin_dir = base_config.paths.plugin_dir
-    state_dir = base_config._test_state_dir
+    state_dir = getattr(base_config, '_test_state_dir')
     plugin1_name = "plugin-one"
     plugin2_name = "plugin-two"
 
     create_dummy_plugin(plugin_dir, state_dir, plugin1_name, register_hooks={"register_filters": 'registry.add_filter("filter_one", dummy_callable)'})
-    # FIX: Use correct hook name 'register_feature_extractors'
     create_dummy_plugin(plugin_dir, state_dir, plugin2_name, register_hooks={"register_feature_extractors": 'registry.add_feature("feature_two", dummy_callable)'})
 
     # Explicitly call discover_and_load
@@ -260,12 +262,11 @@ def test_load_multiple_plugins_registration(plugin_loader: PluginLoader, base_co
 def test_registration_overwriting(plugin_loader: PluginLoader, base_config: SygnalsConfig, teardown_sys_path, caplog):
     """Test that registering the same name logs a warning and overwrites."""
     plugin_dir = base_config.paths.plugin_dir
-    state_dir = base_config._test_state_dir
+    state_dir = getattr(base_config, '_test_state_dir')
     plugin1_name = "plugin-overwriter-1"
     plugin2_name = "plugin-overwriter-2"
     feature_name = "shared_feature"
 
-    # FIX: Use correct hook name 'register_feature_extractors'
     # Plugin 1 registers the feature
     create_dummy_plugin(plugin_dir, state_dir, plugin1_name, register_hooks={"register_feature_extractors": f'registry.add_feature("{feature_name}", lambda: 1)'})
     # Plugin 2 registers the same feature name
@@ -288,12 +289,75 @@ def test_registration_overwriting(plugin_loader: PluginLoader, base_config: Sygn
     assert registered_feature() == 2 # Should be the function from plugin 2
 
 
+# --- Tests for Data Handlers ---
+
+def test_load_plugin_registering_reader_writer(plugin_loader: PluginLoader, base_config: SygnalsConfig, teardown_sys_path):
+    """Test loading a plugin that registers data readers and writers."""
+    plugin_dir = base_config.paths.plugin_dir
+    state_dir = getattr(base_config, '_test_state_dir')
+    plugin_name = "test-io-plugin"
+    hooks = {
+        "register_data_readers": 'registry.add_reader(".custom", dummy_reader)',
+        "register_data_writers": 'registry.add_writer(".custom", dummy_writer)',
+    }
+    create_dummy_plugin(plugin_dir, state_dir, plugin_name, register_hooks=hooks)
+
+    # Explicitly call discover_and_load
+    plugin_loader.discover_and_load()
+
+    assert plugin_name in plugin_loader.loaded_plugins
+    # Check registry for the reader/writer
+    reader = plugin_loader.registry.get_reader(".custom")
+    writer = plugin_loader.registry.get_writer(".custom")
+    assert reader is not None and callable(reader)
+    assert writer is not None and callable(writer)
+    assert plugin_loader.registry.list_readers() == [".custom"]
+    assert plugin_loader.registry.list_writers() == [".custom"]
+
+    # Verify the dummy reader works via registry
+    assert reader(path="dummy") == {'data': np.array([1])}
+
+
+def test_data_handler_registration_overwriting(plugin_loader: PluginLoader, base_config: SygnalsConfig, teardown_sys_path, caplog):
+    """Test overwriting data handlers and logging warnings."""
+    plugin_dir = base_config.paths.plugin_dir
+    state_dir = getattr(base_config, '_test_state_dir')
+    plugin1_name = "plugin-io-1"
+    plugin2_name = "plugin-io-2"
+    extension = ".mydata"
+
+    # Plugin 1 registers reader/writer
+    hooks1 = {
+        "register_data_readers": f'registry.add_reader("{extension}", lambda path: 1)',
+        "register_data_writers": f'registry.add_writer("{extension}", lambda data, path: None)',
+    }
+    create_dummy_plugin(plugin_dir, state_dir, plugin1_name, register_hooks=hooks1)
+    # Plugin 2 registers reader/writer for the same extension
+    hooks2 = {
+        "register_data_readers": f'registry.add_reader("{extension}", lambda path: 2)',
+        "register_data_writers": f'registry.add_writer("{extension}", lambda data, path: None)',
+    }
+    create_dummy_plugin(plugin_dir, state_dir, plugin2_name, register_hooks=hooks2)
+
+    with caplog.at_level(logging.WARNING):
+        plugin_loader.discover_and_load()
+
+    # Check warnings
+    assert f"Reader for extension '{extension}' is already registered. Overwriting." in caplog.text
+    assert f"Writer for extension '{extension}' is already registered. Overwriting." in caplog.text
+
+    # Check that the handler from the second plugin is active
+    reader = plugin_loader.registry.get_reader(extension)
+    assert reader is not None
+    assert reader(path="dummy") == 2 # Should be the function from plugin 2
+
+
 # --- Existing Tests (Keep and Ensure They Still Pass) ---
 
 def test_skip_incompatible_plugin(plugin_loader: PluginLoader, base_config: SygnalsConfig, teardown_sys_path):
     """Test that an incompatible plugin (based on sygnals_api) is skipped."""
     plugin_dir = base_config.paths.plugin_dir
-    state_dir = base_config._test_state_dir
+    state_dir = getattr(base_config, '_test_state_dir')
     plugin_name = "test-incompatible"
     # Require a future API version
     create_dummy_plugin(plugin_dir, state_dir, plugin_name, api_req=">=99.0.0")
@@ -311,7 +375,7 @@ def test_skip_incompatible_plugin(plugin_loader: PluginLoader, base_config: Sygn
 def test_skip_disabled_plugin(plugin_loader: PluginLoader, base_config: SygnalsConfig, teardown_sys_path):
     """Test that a disabled plugin is skipped during loading."""
     plugin_dir = base_config.paths.plugin_dir
-    state_dir = base_config._test_state_dir
+    state_dir = getattr(base_config, '_test_state_dir')
     plugin_name = "test-disabled"
     create_dummy_plugin(plugin_dir, state_dir, plugin_name, is_enabled=False)
 
@@ -348,7 +412,7 @@ name = "{plugin_name}"
 sygnals_api = ">=1.0.0"
 entry_point = "invalid.plugin:InvalidPlugin"
 """
-    (plugin_root / "plugin.toml").write_text(invalid_manifest)
+    (plugin_root / "plugin.toml").write_text(invalid_manifest, encoding='utf-8')
 
     plugin_loader.discover_and_load()
     assert plugin_name not in plugin_loader.loaded_plugins
@@ -359,7 +423,7 @@ entry_point = "invalid.plugin:InvalidPlugin"
 def test_handle_entry_point_import_error(plugin_loader: PluginLoader, base_config: SygnalsConfig):
     """Test loading when the entry_point module/class cannot be imported."""
     plugin_dir = base_config.paths.plugin_dir
-    state_dir = base_config._test_state_dir
+    state_dir = getattr(base_config, '_test_state_dir')
     plugin_name = "test-import-error"
     plugin_root = plugin_dir / plugin_name
     plugin_root.mkdir()
@@ -370,7 +434,7 @@ version = "0.1.0"
 sygnals_api = ">=1.0.0"
 entry_point = "non_existent_module.plugin:NonExistentPlugin"
 """
-    (plugin_root / "plugin.toml").write_text(manifest_content)
+    (plugin_root / "plugin.toml").write_text(manifest_content, encoding='utf-8')
     # Update state file (needed by create_dummy_plugin logic, do manually here)
     current_state = _load_plugin_state(state_dir)
     current_state[plugin_name] = True
@@ -386,7 +450,7 @@ entry_point = "non_existent_module.plugin:NonExistentPlugin"
 def test_handle_entry_point_not_subclass(plugin_loader: PluginLoader, base_config: SygnalsConfig, teardown_sys_path):
     """Test loading when entry_point class doesn't inherit from SygnalsPluginBase."""
     plugin_dir = base_config.paths.plugin_dir
-    state_dir = base_config._test_state_dir
+    state_dir = getattr(base_config, '_test_state_dir')
     plugin_name = "test-not-subclass"
     # Create the dummy plugin structure first
     _, entry_point_path = create_dummy_plugin(plugin_dir, state_dir, plugin_name)
@@ -412,13 +476,13 @@ class {class_name_correct}:
     def version(self): return "0.1.0"
 
 """
-    plugin_py_path.write_text(plugin_py_content_wrong_class)
+    plugin_py_path.write_text(plugin_py_content_wrong_class, encoding='utf-8')
 
     # Adjust the manifest entry point to point to the wrong class
     manifest_path = plugin_dir / plugin_name / "plugin.toml"
     manifest_data = toml.load(manifest_path)
     manifest_data['entry_point'] = f"{package_name}.plugin:{class_name_wrong}" # Point to wrong class
-    manifest_path.write_text(toml.dumps(manifest_data))
+    manifest_path.write_text(toml.dumps(manifest_data), encoding='utf-8')
 
     plugin_loader.discover_and_load()
     assert plugin_name not in plugin_loader.loaded_plugins
@@ -429,7 +493,7 @@ class {class_name_correct}:
 
 def test_plugin_state_save_load(base_config: SygnalsConfig):
     """Test saving and loading plugin enabled/disabled state."""
-    state_dir = base_config._test_state_dir # Use dedicated state dir
+    state_dir = getattr(base_config, '_test_state_dir') # Use dedicated state dir
     state_file = state_dir / PLUGIN_STATE_FILENAME
 
     # Initial state: file doesn't exist, load should return empty dict
@@ -450,7 +514,7 @@ def test_plugin_state_save_load(base_config: SygnalsConfig):
 def test_plugin_list_cli(plugin_loader: PluginLoader, base_config: SygnalsConfig, teardown_sys_path, mocker):
     """Test the 'sygnals plugin list' command."""
     plugin_dir = base_config.paths.plugin_dir
-    state_dir = base_config._test_state_dir
+    state_dir = getattr(base_config, '_test_state_dir')
     # Create one loaded, one disabled, one incompatible
     create_dummy_plugin(plugin_dir, state_dir, "plugin-loaded", version="1.0", register_hooks={"register_filters": 'registry.add_filter("f1", dummy_callable)'})
     create_dummy_plugin(plugin_dir, state_dir, "plugin-disabled", version="1.1", is_enabled=False)
@@ -485,7 +549,7 @@ def test_plugin_list_cli(plugin_loader: PluginLoader, base_config: SygnalsConfig
 def test_plugin_enable_disable_cli(plugin_loader: PluginLoader, base_config: SygnalsConfig, teardown_sys_path, mocker):
     """Test the 'sygnals plugin enable/disable' commands."""
     plugin_dir = base_config.paths.plugin_dir
-    state_dir = base_config._test_state_dir
+    state_dir = getattr(base_config, '_test_state_dir')
     plugin_name = "plugin-toggle"
     create_dummy_plugin(plugin_dir, state_dir, plugin_name, is_enabled=True) # Start enabled
 
@@ -564,9 +628,5 @@ def test_plugin_scaffold_cli(tmp_path: Path, mocker):
     assert (package_dir / "plugin.py").is_file()
 
     # Check content of one file (e.g., plugin.toml)
-    manifest_content = (plugin_root / "plugin.toml").read_text()
+    manifest_content = (plugin_root / "plugin.toml").read_text(encoding='utf-8')
     assert f'name = "{plugin_name}"' in manifest_content
-
-# TODO: Add tests for entry point discovery if a reliable way to simulate
-# installed packages within pytest is implemented (e.g., using tmp_path and pip install -e,
-# or mocking importlib.metadata.entry_points).
