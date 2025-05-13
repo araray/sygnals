@@ -44,9 +44,9 @@ Sygnals provides a comprehensive suite of tools, accessible via the command line
 
 ### Core Capabilities
 * **Robust Data Loading & Saving:** Load and save data in various formats including CSV, JSON, NPZ, WAV, FLAC, and Ogg. Support for additional formats like Parquet and HDF5 is available via plugins (e.g., installable via `pip install sygnals-parquet`).
-* **Layered Configuration:** Powerful configuration management via CLI arguments, environment variables, and TOML config files (`sygnals.toml`). See the [Configuration](https://www.google.com/search?q=%23configuration) section for details.
+* **Layered Configuration:** Powerful configuration management via CLI arguments, environment variables, and TOML config files (`sygnals.toml`). See the [Configuration](#configuration) section for details.
 * **Detailed Logging:** Configurable logging system with console output (using Rich) and persistent file logging. See the [Logging System](#logging-system) section.
-* **Extensible Plugin System:** Easily extend Sygnals with custom Python plugins. See the [Plugin System](https://www.google.com/search?q=%23plugin-system) section.
+* **Extensible Plugin System:** Easily extend Sygnals with custom Python plugins. See the [Plugin System](#plugin-system) section.
 
 ### Signal Segmentation (`sygnals segment`)
 * **Fixed-Length Segmentation:** Divide audio into segments based on fixed length with optional overlap and padding. Underlying utilities for silence and event-based segmentation are also available in the core library for programmatic use.
@@ -380,7 +380,7 @@ Saves processed data, potentially applying formatting for ML model ingestion. Th
 
 ### `sygnals plugin`
 
-Manage Sygnals plugins. For more details on the plugin system and development, see the [Plugin System](https://www.google.com/search?q=%23plugin-system) section.
+Manage Sygnals plugins. For more details on the plugin system and development, see the [Plugin System](#plugin-system) section.
 
 #### `sygnals plugin list`
 
@@ -1010,7 +1010,7 @@ Sygnals features a flexible plugin system allowing users and developers to exten
 
 Plugins installed via pip (declaring a `sygnals.plugins` entry point) or placed in the configured local plugin directory (`~/.config/sygnals/plugins/` by default) are automatically discovered by Sygnals on startup.
 
-You can manage discovered plugins using the `sygnals plugin` command group (see [Usage - sygnals plugin](https://www.google.com/search?q=%23sygnals-plugin) for command details):
+You can manage discovered plugins using the `sygnals plugin` command group (see [Usage - sygnals plugin](#sygnals-plugin) for command details):
 
   * `sygnals plugin list`: See all discovered plugins and their current status.
   * `sygnals plugin enable <name>`: Enable a discovered plugin.
@@ -1105,7 +1105,7 @@ log_filename_template = "{timestamp:%Y%m%d_%H%M%S}.log"
 
 This system allows you to define global settings in your user config, override them for specific projects in a project config, and make temporary adjustments via environment variables or CLI flags. Plugin-specific configuration can be added in a `[plugins.<plugin_name>]` section if the plugin supports it.
 
-> Use `sygnals show-config` to inspect the currently loaded configuration (see [Usage - sygnals show-config](sygnals-show-config)). 
+> Use `sygnals show-config` to inspect the currently loaded configuration (see [Usage - sygnals show-config](#sygnals-show-config)). 
 
 ---
 
@@ -1113,7 +1113,7 @@ This system allows you to define global settings in your user config, override t
 
 Sygnals includes a configurable logging system to provide feedback during execution and assist with debugging. It uses Python's standard `logging` module, enhanced with Rich for console output and configurable file logging.
 
-Logging behavior is controlled primarily via the `[logging]` section in `sygnals.toml` (see [Configuration](Configuration)) and command-line verbosity flags (`-v`, `-vv`, `-q`).
+Logging behavior is controlled primarily via the `[logging]` section in `sygnals.toml` (see [Configuration](#Configuration)) and command-line verbosity flags (`-v`, `-vv`, `-q`).
 
   * **Console Output:** Controlled by the global verbosity flags:
       * Default (no flag): Shows `WARNING` and `ERROR` messages.
