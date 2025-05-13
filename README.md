@@ -380,7 +380,7 @@ Saves processed data, potentially applying formatting for ML model ingestion. Th
 
 ### `sygnals plugin`
 
-Manage Sygnals plugins. For more details on the plugin system and development, see the [Plugin System](https://www.google.com/search?q=%23plugin-system) section.
+Manage Sygnals plugins. For more details on the plugin system and development, see the [Plugin System](#plugin-system) section.
 
 #### `sygnals plugin list`
 
