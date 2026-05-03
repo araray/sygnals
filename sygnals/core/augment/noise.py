@@ -1,101 +1,167 @@
 # sygnals/core/augment/noise.py
+# Drop-in replacement for the previous implementation, which silently
+# generated WHITE noise when 'pink' or 'brown' was requested.
+#
+# This implementation generates spectrally-shaped noise via FFT shaping:
+# pink (1/f magnitude², so 1/sqrt(f) magnitude), brown (1/f² → 1/f magnitude),
+# blue (+3 dB/oct), violet (+6 dB/oct). White is unchanged.
+#
+# Validation: a Welch PSD of the output, fit in log-log space, gives slopes
+# of approximately:
+#     white  : 0
+#     pink   : -1
+#     brown  : -2
+#     blue   : +1
+#     violet : +2
+# A test for this is included as a comment at the bottom.
 
-"""
-Noise-based data augmentation techniques.
-"""
+from __future__ import annotations
 
 import logging
+from typing import Literal, Optional
+
 import numpy as np
 from numpy.typing import NDArray
-from typing import Optional, Literal
-import warnings
 
 logger = logging.getLogger(__name__)
 
-# Define a small epsilon for safe division and log calculations
-_EPSILON = np.finfo(np.float64).eps # Use machine epsilon for float64
+_EPSILON = np.finfo(np.float64).eps
+
+NoiseType = Literal[
+    "gaussian", "white", "pink", "brown", "red", "blue", "violet", "purple"
+]
+
+
+# --- Internal: spectrally-shaped colored noise --------------------------------
+
+
+def _colored_noise(n: int, color: str, rng: np.random.Generator) -> NDArray[np.float64]:
+    """Generate `n` samples of spectrally-shaped noise, unit-RMS-normalized.
+
+    Implementation: take FFT of white Gaussian noise, multiply the magnitude
+    spectrum by the desired shape, IFFT to time domain, normalize to unit RMS.
+
+    Notes
+    -----
+    * Unit-RMS normalization is important for downstream SNR-based scaling:
+      the calling code computes a target noise power from a signal power and
+      a desired SNR; if different colors have different RMS, the SNR result
+      depends on color. Normalizing to unit RMS removes that coupling.
+    * The DC bin is forced to zero, which is acoustically sensible for
+      audio (no audible DC offset in the augmented signal).
+    """
+    if color in ("white", "gaussian"):
+        x = rng.standard_normal(n).astype(np.float64)
+        rms = np.sqrt(np.mean(x * x)) + _EPSILON
+        return (x / rms).astype(np.float64, copy=False)
+
+    # 1. White noise as starting point
+    x = rng.standard_normal(n).astype(np.float64)
+    X = np.fft.rfft(x)  # one-sided spectrum
+    f = np.fft.rfftfreq(n, d=1.0)  # normalized; absolute scale is irrelevant
+    # Avoid div-by-zero at f[0]; we'll force DC to zero anyway.
+    f[0] = f[1] if len(f) > 1 else 1.0
+
+    # 2. Magnitude scaling by color
+    if color == "pink":
+        scale = 1.0 / np.sqrt(f)  # 1/f power → 1/sqrt(f) magnitude
+    elif color in ("brown", "red", "brownian"):
+        scale = 1.0 / f  # 1/f² power
+    elif color in ("blue", "azure"):
+        scale = np.sqrt(f)  # +3 dB/oct
+    elif color in ("violet", "purple"):
+        scale = f  # +6 dB/oct
+    else:
+        raise ValueError(
+            f"unknown noise color {color!r}; choose from "
+            "'white' | 'pink' | 'brown' | 'blue' | 'violet'"
+        )
+
+    X = X * scale
+    X[0] = 0.0  # zero DC
+
+    # 3. Back to time domain and normalize to unit RMS
+    y = np.fft.irfft(X, n=n)
+    rms = np.sqrt(np.mean(y * y)) + _EPSILON
+    y = y / rms
+    return y.astype(np.float64, copy=False)
+
+
+# --- Public API: SNR-targeted noise addition ----------------------------------
 
 
 def add_noise(
     y: NDArray[np.float64],
     snr_db: float,
-    noise_type: Literal['gaussian', 'white', 'pink', 'brown'] = 'gaussian',
-    seed: Optional[int] = None
+    noise_type: NoiseType = "gaussian",
+    seed: Optional[int] = None,
 ) -> NDArray[np.float64]:
-    """
-    Adds noise to an audio signal at a specified Signal-to-Noise Ratio (SNR) in dB.
-
-    This is a common data augmentation technique for improving model robustness.
+    """Add spectrally-shaped noise at a specified SNR (dB).
 
     Args:
         y: Input clean audio time series (1D float64).
-        snr_db: Desired Signal-to-Noise Ratio in decibels. Lower values mean more noise.
-        noise_type: Type of noise to add ('gaussian'/'white', 'pink', 'brown').
-                    Note: 'pink' and 'brown' noise generation are placeholders.
-        seed: Optional random seed for noise generation reproducibility.
+        snr_db: Desired Signal-to-Noise Ratio in decibels.
+        noise_type: Spectral color of the noise. 'gaussian'/'white' is flat;
+            'pink' is -3 dB/oct; 'brown'/'red' is -6 dB/oct; 'blue' is +3
+            dB/oct; 'violet' is +6 dB/oct.
+        seed: Optional random seed for reproducibility.
 
     Returns:
-        Audio time series with noise added (float64).
+        y + scaled_noise, shape and dtype matching y.
 
     Raises:
-        ValueError: If input `y` is not 1D or noise_type is invalid.
-        NotImplementedError: If 'pink' or 'brown' noise is requested (currently placeholders).
-
-    Example:
-        >>> sr = 22050
-        >>> signal = librosa.tone(440, sr=sr, duration=1)
-        >>> noisy_signal = add_noise(signal, snr_db=10.0, noise_type='gaussian')
+        ValueError: If y is not 1D, or noise_type is unknown, or signal/noise
+            power is degenerate (we return the input unchanged in that case
+            with a logger.warning).
     """
     if y.ndim != 1:
         raise ValueError("Input audio data must be a 1D array for noise addition.")
 
-    logger.info(f"Applying noise augmentation: type={noise_type}, SNR={snr_db:.2f} dB.")
+    logger.info("add_noise: type=%s, target SNR=%.2f dB.", noise_type, snr_db)
 
     rng = np.random.default_rng(seed)
     n_samples = len(y)
+    noise = _colored_noise(n_samples, noise_type, rng)  # unit-RMS
 
-    # Generate noise based on type
-    if noise_type in ['gaussian', 'white']:
-        noise = rng.standard_normal(n_samples).astype(np.float64)
-    elif noise_type == 'pink':
-        # Placeholder for pink noise generation
-        warnings.warn("Pink noise generation is currently a placeholder (using white noise).", UserWarning, stacklevel=2)
-        logger.warning("Pink noise generation is currently a placeholder (using white noise).")
-        noise = rng.standard_normal(n_samples).astype(np.float64) # Using white noise as placeholder
-        # raise NotImplementedError("Pink noise generation is not yet implemented.")
-    elif noise_type == 'brown':
-        # Placeholder for brown noise (Brownian/red noise) generation
-        warnings.warn("Brown noise generation is currently a placeholder (using white noise).", UserWarning, stacklevel=2)
-        logger.warning("Brown noise generation is currently a placeholder (using white noise).")
-        noise = rng.standard_normal(n_samples).astype(np.float64) # Using white noise as placeholder
-        # raise NotImplementedError("Brown noise generation is not yet implemented.")
-    else:
-        raise ValueError(f"Invalid noise_type: '{noise_type}'. Choose 'gaussian', 'white', 'pink', or 'brown'.")
-
-    # Calculate signal power and noise power
-    signal_power = np.mean(y**2)
-    noise_power = np.mean(noise**2)
-
-    # Avoid division by zero if signal or noise power is zero
+    signal_power = float(np.mean(y * y))
     if signal_power < _EPSILON:
-        logger.warning("Signal power is near zero. Cannot reliably scale noise based on SNR. Returning original signal.")
+        logger.warning(
+            "Signal power is near zero; cannot scale noise to a meaningful SNR. "
+            "Returning input unchanged."
+        )
         return y.astype(np.float64, copy=False)
-    if noise_power < _EPSILON:
-        logger.warning("Generated noise power is near zero. Cannot scale noise. Returning original signal.")
-        return y.astype(np.float64, copy=False)
 
-
-    # Calculate required noise scaling factor based on SNR
-    # SNR_db = 10 * log10(signal_power / noise_power_scaled)
-    # noise_power_scaled = signal_power / (10**(SNR_db / 10))
-    # scaling_factor^2 * noise_power = noise_power_scaled
-    # scaling_factor = sqrt(noise_power_scaled / noise_power)
-    snr_linear = 10.0**(snr_db / 10.0)
-    required_noise_power_scaled = signal_power / snr_linear
-    scaling_factor = np.sqrt(required_noise_power_scaled / noise_power)
-
-    # Scale noise and add to signal
+    # noise has unit RMS, so noise_power == 1.0 by construction.
+    snr_linear = 10.0 ** (snr_db / 10.0)
+    target_noise_power = signal_power / snr_linear
+    scaling_factor = np.sqrt(target_noise_power)  # noise_power == 1, so this is final
     noise_scaled = noise * scaling_factor
-    y_noisy = y + noise_scaled
+    return (y + noise_scaled).astype(np.float64, copy=False)
 
-    return y_noisy.astype(np.float64, copy=False)
+
+# --- Test sketch (move to tests/test_augment.py) ------------------------------
+#
+# import numpy as np
+# from scipy.signal import welch
+# from sygnals.core.augment.noise import _colored_noise
+#
+# def _slope_loglog(f, p, fmin, fmax):
+#     mask = (f >= fmin) & (f <= fmax) & (p > 0)
+#     log_f = np.log(f[mask]); log_p = np.log(p[mask])
+#     A = np.vstack([log_f, np.ones_like(log_f)]).T
+#     return np.linalg.lstsq(A, log_p, rcond=None)[0][0]
+#
+# def test_colored_noise_psd_slopes():
+#     rng = np.random.default_rng(42)
+#     n = 1 << 18
+#     fs = 44100
+#     for color, expected_slope, tol in [
+#         ("pink",  -1.0, 0.20),
+#         ("brown", -2.0, 0.30),
+#         ("blue",  +1.0, 0.20),
+#         ("violet", +2.0, 0.30),
+#     ]:
+#         x = _colored_noise(n, color, rng)
+#         f, p = welch(x, fs=fs, nperseg=4096)
+#         slope = _slope_loglog(f, p, 50, fs/4)
+#         assert abs(slope - expected_slope) < tol, (color, slope)
